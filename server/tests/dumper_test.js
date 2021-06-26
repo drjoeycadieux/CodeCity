@@ -30,8 +30,8 @@ const Selector = require('../selector');
 const {T} = require('./testing');
 const util = require('util');
 
-// Unpack test-only exports:
-const {Components, ObjectDumper} = testOnly;
+// Unpack test-only exports.
+const {Components, ObjectDumper, ScopeDumper} = testOnly;
 
 /**
  * A mock Writable, for testing.
@@ -81,7 +81,7 @@ exports.testObjectDumperPrototypeIsWritable = function(t) {
 
   dumper.dumpBinding(new Selector('Object'), Do.SET);
   dumper.dumpBinding(new Selector('Object.prototype'), Do.SET);
-  
+
   const objectPrototypeDumper = dumper.getObjectDumper_(intrp.OBJECT);
   const parentDumper = dumper.getDumperFor('parent');
   const childDumper = dumper.getDumperFor('child');
@@ -136,12 +136,108 @@ exports.testObjectDumperPrototypeIsWritable = function(t) {
 };
 
 /**
+ * Tests for the ObjectDumper.prototype.updateRef method.
+ * @suppress {accessControls}
+ */
+exports.testObjectDumperUpdateRef = function(t) {
+  const intrp = new Interpreter();
+
+  // ScopeDumper for global scope and ObjectDumpers for some arbitrary objects.
+  const globalDumper = new ScopeDumper(intrp.global);
+  const fooDumper = new ObjectDumper(new intrp.Object());
+  const barDumper = new ObjectDumper(new intrp.Object());
+  const reachableDumper = new ObjectDumper(new intrp.Object());
+  const unreachableDumper = new ObjectDumper(new intrp.Object());
+
+  // Stub Dumper.
+  const /** !Dumper */ dumper = /** @type {?} */({
+    intrp2: intrp,
+    scope: intrp.global,
+  });
+
+  // Scenario 0: Reject self references.
+  fooDumper.updateRef(dumper, new Components(fooDumper, ''));
+  t.expect('fooDumper.updateRef(<foo, "">); fooDumper.ref',
+           fooDumper.ref, null);
+
+  // Scenario 1: Typical cases during dumping.  We've dumped foo and
+  // are dumping foo.bar, which might also have (not preferred)
+  // references from reachable and unreachable objects or the global
+  // scope.
+  fooDumper.preferredRef = new Components(globalDumper, 'foo');
+  fooDumper.ref = fooDumper.preferredRef;  // Reachable.
+  barDumper.preferredRef = new Components(fooDumper, 'bar');  // foo.bar
+  barDumper.ref = null;  // Not yet reachable.
+
+  reachableDumper.preferredRef = new Components(globalDumper, 'reachable');
+  reachableDumper.ref = reachableDumper.preferredRef;  // Reachable.
+  unreachableDumper.preferredRef = new Components(globalDumper, 'unreachable');
+  unreachableDumper.ref = null;  // Not yet reachable.
+  
+  // Test all N*N combinations of possible (existing, proposed) refs
+  // for bar.  Cases are in order increrasing preferability: earlier
+  // ones should be replace by later but not vice-versa.
+  const cases = [
+    null,  // No known reference yet.
+
+    // Refs from an unreachable object are better than nothing.
+    new Components(unreachableDumper, Selector.PROTOTYPE),
+    new Components(unreachableDumper, '#hash'),
+    new Components(unreachableDumper, '42'),
+    new Components(unreachableDumper, 'aaaaaaaaaa'),
+    new Components(unreachableDumper, 'bar'),
+
+    // Refs from reachable objects are better - but other than
+    // foo.bar, these two objects are equally good so order just comes
+    // down to selector badness.
+    new Components(reachableDumper, Selector.PROTOTYPE),
+    new Components(fooDumper, Selector.PROTOTYPE),
+    new Components(reachableDumper, '#hash'),
+    new Components(fooDumper, '#hash'),
+    new Components(reachableDumper, '42'),
+    new Components(fooDumper, '42'),
+    new Components(reachableDumper, 'aaaaaaaaaa'),
+    new Components(fooDumper, 'aaaaaaaaaa'),
+    new Components(reachableDumper, 'bar'),
+    new Components(reachableDumper, 'b'),
+    new Components(fooDumper, 'b'),
+
+    // Refs from a scope are generally better.
+    new Components(globalDumper, 'aaaaaaaaaa'),
+    new Components(globalDumper, 'bar'),
+    new Components(globalDumper, 'b'),
+
+    // The preferred reference is best of all.
+    new Components(fooDumper, 'bar'),
+  ];
+  for (var i = 0; i < cases.length; i++) {
+    for (var j = 1; j < cases.length; j++) {  // Don't call updateRef with null.
+      if (!reachableDumper.ref) throw new Error();
+      const before = cases[i];
+      const suggested = cases[j];
+      const expected = cases[Math.max(i, j)];
+      const name = util.format('updateRef %o to %o?', before, suggested);
+      const message =
+          util.format(['barDumper.ref = %s;',
+                       'barDumper.updateRef(%s);',
+                       'barDumper.ref;'].map(s => '    ' + s).join('\n'),
+                      before, suggested);
+      barDumper.ref = before;
+      barDumper.updateRef(dumper, suggested);
+      t.expect(name, barDumper.ref, expected, message);
+    }
+  }
+
+  // TODO(cpcallen): Scenario 2: unreachable refs (e.g. due to scoping).
+};
+
+/**
  * Unit tests for the Dumper.prototype.isShadowed_ method.
  * @param {!T} t The test runner object.
  * @suppress {accessControls}
  */
 exports.testDumperPrototypeIsShadowed_ = function(t) {
-  const intrp = getInterpreter();
+  const intrp = new Interpreter();
   const pristine = new Interpreter();
   const dumper = new Dumper(pristine, intrp);
 
@@ -163,7 +259,7 @@ exports.testDumperPrototypeIsShadowed_ = function(t) {
  * @suppress {accessControls}
  */
 exports.testDumperPrototypeExprForPrimitive_ = function(t) {
-  const intrp = getInterpreter();
+  const intrp = new Interpreter();
   const pristine = new Interpreter();
   const dumper = new Dumper(pristine, intrp);
 
@@ -211,7 +307,13 @@ exports.testDumperPrototypeExprForPrimitive_ = function(t) {
  * @suppress {accessControls}
  */
 exports.testDumperPrototypeExprFor_ = function(t) {
-  const intrp = getInterpreter();
+  // Create an Interperter with a UserFunction to dump.
+  const intrp = new Interpreter();
+  intrp.createThreadForSrc('function foo(bar) {}');
+  intrp.run();
+  const func = /** @type {!Interpreter.prototype.UserFunction} */ (
+      intrp.global.get('foo'));
+
   const pristine = new Interpreter();
   const dumper = new Dumper(pristine, intrp);
 
@@ -223,11 +325,8 @@ exports.testDumperPrototypeExprFor_ = function(t) {
     dumper.getObjectDumper_(/** @type {!Interpreter.prototype.Object} */
         (intrp.builtins.get(b))).ref = new Components(dumper.global, b);
   }
-
-  // Create UserFunction to dump.
-  intrp.createThreadForSrc('function foo(bar) {}');
-  intrp.run();
-  const func = intrp.global.get('foo');
+  // Give foo a reference too, even though it has not been created yet.
+  dumper.getObjectDumper_(func).ref = new Components(dumper.global, 'foo');
 
   const cases = [
     [intrp.OBJECT, "new 'Object.prototype'"],
@@ -415,23 +514,76 @@ exports.testSubDumperPrototypeSurvey = function(t) {
  * @suppress {accessControls}
  */
 exports.testDumperPrototypeExprForSelector_ = function(t) {
-  const intrp = getInterpreter();
+  const intrp = new Interpreter();
   const pristine = new Interpreter();
   const dumper = new Dumper(pristine, intrp);
 
-  // Test dumping selector before and after dumping Object.getPrototypeOf.
-  const selector = new Selector('foo.bar^.baz');
-  t.expect(util.format('Dumper.p.exprForSelector_(%s)  // 0', selector),
-           dumper.exprForSelector_(selector),
+  // Test dumping a selector before and after dumping Object.getPrototypeOf.
+  const s1 = new Selector('foo.bar{proto}.baz');
+  t.expect(util.format('Dumper.p.exprForSelector_(%s)  // 0', s1),
+           dumper.exprForSelector_(s1),
            "(new 'Object.getPrototypeOf')(foo.bar).baz");
   // Give Object.getPrototypeOf a referrence indicating it is
   // available via the global variable myGetPrototypeOf.
   dumper.getObjectDumper_(/** @type {!Interpreter.prototype.Object} */
       (intrp.builtins.get('Object.getPrototypeOf'))).ref =
           new Components(dumper.global, 'myGetPrototypeOf');
-  t.expect(util.format('Dumper.p.exprForSelector_(%s)  // 1', selector),
-           dumper.exprForSelector_(selector),
+  t.expect(util.format('Dumper.p.exprForSelector_(%s)  // 1', s1),
+           dumper.exprForSelector_(s1),
            'myGetPrototypeOf(foo.bar).baz');
+
+  // Test dumping a selector before and after dumping Object.getOwnerOf.
+  const s2 = new Selector('quux{owner}');
+  t.expect(util.format('Dumper.p.exprForSelector_(%s)  // 0', s2),
+           dumper.exprForSelector_(s2), "(new 'Object.getOwnerOf')(quux)");
+  // Give Object.getOwnerOf a referrence indicating it is
+  // available via the global variable myGetOwnerOf.
+  dumper.getObjectDumper_(/** @type {!Interpreter.prototype.Object} */
+      (intrp.builtins.get('Object.getOwnerOf'))).ref =
+          new Components(dumper.global, 'myGetOwnerOf');
+  t.expect(util.format('Dumper.p.exprForSelector_(%s)  // 1', s2),
+           dumper.exprForSelector_(s2), 'myGetOwnerOf(quux)');
+};
+
+/**
+ * Unit tests for the Dumper.prototype.exprForCall_ method.
+ * @param {!T} t The test runner object.
+ * @suppress {accessControls}
+ */
+exports.testDumperPrototypeExprForCall_ = function(t) {
+  const intrp = new Interpreter();
+  const pristine = new Interpreter();
+  const dumper = new Dumper(pristine, intrp);
+
+  // Test dumping builtin calls with no arguments.  Note that eval is
+  // inserted in the global Scope at Interpreter construction time,
+  // while escape is not.
+  t.expect("Dumper.p.exprForCall_('eval')",
+           dumper.exprForCall_('eval'),
+           'eval()');  // eval is inserted in global scope at creation.
+
+  t.expect("Dumper.p.exprForCall_('escape')",
+           dumper.exprForCall_('escape'),
+           "(new 'escape')()");
+
+  // Test dumping builtin calls with primitive arguments.
+  t.expect("Dumper.p.exprForCall_('eval', [true])",
+           dumper.exprForCall_('eval', [true]),
+           "eval(true)");
+
+  t.expect("Dumper.p.exprForCall_('eval', ['foo', 42])",
+           dumper.exprForCall_('eval', ['foo', 42]),
+           "eval('foo', 42)");
+
+  // Test dumping builtin calls with object arguments.
+  t.expect("Dumper.p.exprForCall_('eval', [eval])",
+           dumper.exprForCall_('eval', [intrp.builtins.get('eval')]),
+           "eval(eval)");
+
+  // Test dumping builtin calls with Selector arguments.
+  t.expect("Dumper.p.exprForCall_('eval', [new Selector('foo.bar.baz')])",
+           dumper.exprForCall_('eval', [new Selector('foo.bar.baz')]),
+           "eval(foo.bar.baz)");
 };
 
 /**
@@ -517,13 +669,20 @@ exports.testDumperPrototypeDumpBinding = function(t) {
       title: 'recursion-simple',
       src: `
         var obj = {a: {id: 'a'}, b: {id: 'b'}, c: {id: 'c'}};
+        Object.setPrototypeOf(obj.c, {id: 'd'});
       `,
       // Mark obj.b.id to be pruned, and pruneRest of obj.c.
       prune: ['obj.b.id'],
       pruneRest: ['obj.c'],
       dump: [
-        ['obj', Do.RECURSE, "var obj = {};\nobj.a = {};\nobj.a.id = 'a';\n" +
-            'obj.b = {};\nobj.c = {};\n'],
+        ['obj', Do.RECURSE,
+         'var obj = {};\n' +
+             "obj.a = {};\n" +
+             "obj.a.id = 'a';\n" +
+             'obj.b = {};\n' +
+             'obj.c = {};\n' +
+             "(new 'Object.setPrototypeOf')(obj.c, {});\n" +
+             "(new 'Object.getPrototypeOf')(obj.c).id = 'd';\n"],
       ],
       after: [
         ['obj.a', Do.RECURSE],
@@ -800,7 +959,7 @@ exports.testDumperPrototypeDumpBinding = function(t) {
         // Verify property set before extensibility prevented.
         ['obj2', Do.RECURSE, 'obj2.id = 2;\nObject.preventExtensions(obj2);\n'],
         // Verify treeOnly doesn't prevent .preventExtensions being called.
-        ['obj3', Do.RECURSE, 'obj3.id = 3;\nobj3.other = {};\n' + 
+        ['obj3', Do.RECURSE, 'obj3.id = 3;\nobj3.other = {};\n' +
             'Object.preventExtensions(obj3);\n', Do.DONE, {treeOnly: true}],
         // Verify we don't call .preventExtensions more than once.
         ['obj3', Do.RECURSE, "obj3.other.id = 'other';\n", Do.RECURSE,
@@ -846,7 +1005,8 @@ exports.testDumperPrototypeDumpBinding = function(t) {
         ['f2', Do.SET, 'var f2 = function F2(arg) {};\n', Do.DONE],
         ['obj.f3', Do.SET, 'obj.f3 = function() {};\n', Do.DONE],
         // BUG(cpcallen): Really want '... = Function(...', due to scoping.
-        ['f4', Do.SET, 'var f4 = function(a1,a2,a3,a4, a5) {};\n', Do.DONE],
+        ['f4', Do.SET,
+         'var f4 = function anonymous(a1,a2,a3,a4, a5\n) {\n\n};\n', Do.DONE],
         // TODO(ES5): verify that f4.name gets deleted.
       ],
       after: [
@@ -1276,20 +1436,34 @@ exports.testScopeDumperPrototypeDump = function(t) {
 };
 
 /**
- * Unit tests for Dumper.prototype.dump
+ * Unit tests for Dumper.prototype.dump.  These need to be async
+ * because connectionListen is (under the covers).
  * @param {!T} t The test runner object.
  */
-exports.testDumperPrototypeDump = function(t) {
+exports.testDumperPrototypeDump = async function(t) {
   const intrp = new Interpreter({noLog: ['net']});
 
-  // Create a variable and a listening socket to dump.
+  // Create a NativeFuction called "continue" that can be used to
+  // resolve awaited Promises.  (Don't add it to the global scope, as
+  // doing so causes dump errors because it's not present in a
+  // pristine Interpreter instance.)
+  // TODO(cpcallen): consider abstracting test machinery into a
+  // runAsyncDumpTest function?
+  let resolve;
+  intrp.createNativeFunction('continue', () => {resolve();}, false);
+
+  // Create a variable and two listening sockets to dump.
   intrp.createThreadForSrc(`
       var listener = {onRecieve: function onRecieve(data) {}};
-      (new 'CC.connectionListen')(8888, listener);
+      (new 'CC.connectionListen')(8888, listener, 100);
+      (new 'CC.connectionListen')(8889, listener);
+      (new 'continue')();
   `);
-  intrp.run();
+  intrp.start();
+  await new Promise((res, rej) => {resolve = res;});  // Wait for continue().
+  intrp.pause();
 
-  // Create Dumper with pristine Interpreter instance to compare to;
+  // Create Dumper with pristine Interpreter instance to compare to.
   const pristine = new Interpreter();
   const dumper = new Dumper(pristine, intrp);
   const output = new MockWritable();
@@ -1298,8 +1472,16 @@ exports.testDumperPrototypeDump = function(t) {
   t.expect('Dumper.p.dump(...) outputs', String(output),
            'var listener = {};\n' +
                'listener.onRecieve = function onRecieve(data) {};\n' +
-               "(new 'CC.connectionListen')(8888, listener);\n");
+               "(new 'CC.connectionListen')(8888, listener, 100);\n" +
+               "(new 'CC.connectionListen')(8889, listener);\n");
 
-  intrp.createThreadForSrc('(new "CC.connectionUnlisten")(8888);');
-  intrp.run();
+  // Clean up.
+  intrp.createThreadForSrc(`
+      (new "CC.connectionUnlisten")(8888);
+      (new "CC.connectionUnlisten")(8889);
+      (new 'continue')();
+  `);
+  intrp.start();
+  await new Promise((res, rej) => {resolve = res;});  // Wait for continue().
+  intrp.stop();
 };

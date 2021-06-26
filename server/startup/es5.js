@@ -17,7 +17,7 @@
 
 /**
  * @fileoverview Polyfills to bring the server's partial JavaScript
- * implementation up to JavaScript 5.1 (or close to it).
+ * implementation up to ECMAScript 5.1 (or close to it).
  * @author fraser@google.com (Neil Fraser)
  */
 
@@ -295,7 +295,7 @@ Object.defineProperty(RegExp.prototype, 'source', {
 ///////////////////////////////////////////////////////////////////////////////
 
 // Add a polyfill to handle create's second argument.
-Object.create = function(proto, props) {
+Object.create = function create(proto, props) {
   var obj = (new 'Object.create')(proto);
   props && Object.defineProperties(obj, props);
   return obj;
@@ -386,7 +386,7 @@ Object.defineProperty(Object, 'seal', {enumerable: false});
 // Array.prototype polyfills
 ///////////////////////////////////////////////////////////////////////////////
 
-Array.prototype.every = function(callback/*, thisArg*/) {
+Array.prototype.every = function every(callback/*, thisArg*/) {
   // Polyfill copied from:
   // developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Array/ever
   if (this === null || this === undefined) {
@@ -405,7 +405,7 @@ Array.prototype.every = function(callback/*, thisArg*/) {
 };
 Object.defineProperty(Array.prototype, 'every', {enumerable: false});
 
-Array.prototype.filter = function(callback/*, thisArg*/) {
+Array.prototype.filter = function filter(callback/*, thisArg*/) {
   // Polyfill copied from:
   // developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Array/filter
   if (this === null || this === undefined) {
@@ -428,7 +428,7 @@ Array.prototype.filter = function(callback/*, thisArg*/) {
 };
 Object.defineProperty(Array.prototype, 'filter', {enumerable: false});
 
-Array.prototype.forEach = function(callback/*, thisArg*/) {
+Array.prototype.forEach = function forEach(callback/*, thisArg*/) {
   // Polyfill copied from:
   // developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Array/forEach
   if (this === null || this === undefined) {
@@ -451,7 +451,7 @@ Object.defineProperty(Array.prototype, 'forEach', {enumerable: false});
   // spec bug github.com/tc39/ecma262/issues/289.
   var visited = [];
 
-  Array.prototype.join = function(separator) {
+  Array.prototype.join = function join(separator) {
     // This implements Array.prototype.join from ES5 §15.4.4.5, with
     // the addition of cycle detection as discussed in
     // https://github.com/tc39/ecma262/issues/289.
@@ -490,7 +490,7 @@ Object.defineProperty(Array.prototype, 'forEach', {enumerable: false});
 })();
 Object.defineProperty(Array.prototype, 'join', {enumerable: false});
 
-Array.prototype.map = function(callback/*, thisArg*/) {
+Array.prototype.map = function map(callback/*, thisArg*/) {
   // Polyfill copied from:
   // developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Array/map
   if (this === null || this === undefined) {
@@ -510,7 +510,7 @@ Array.prototype.map = function(callback/*, thisArg*/) {
 };
 Object.defineProperty(Array.prototype, 'map', {enumerable: false});
 
-Array.prototype.reduce = function(callback /*, initialValue*/) {
+Array.prototype.reduce = function reduce(callback /*, initialValue*/) {
   // Polyfill copied from:
   // developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Array/Reduce
   if (this === null || this === undefined) {
@@ -539,7 +539,7 @@ Array.prototype.reduce = function(callback /*, initialValue*/) {
 };
 Object.defineProperty(Array.prototype, 'reduce', {enumerable: false});
 
-Array.prototype.reduceRight = function(callback /*, initialValue*/) {
+Array.prototype.reduceRight = function reduceRight(callback /*, initialValue*/) {
   // Polyfill copied from:
   // developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Array/ReduceRight
   if (this === null || this === undefined) {
@@ -568,7 +568,7 @@ Array.prototype.reduceRight = function(callback /*, initialValue*/) {
 };
 Object.defineProperty(Array.prototype, 'reduceRight', {enumerable: false});
 
-Array.prototype.some = function(callback/*, thisArg*/) {
+Array.prototype.some = function some(callback/*, thisArg*/) {
   // Polyfill copied from:
   // developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Array/some
   if (this === null || this === undefined) {
@@ -652,13 +652,13 @@ Array.prototype.sort = function sort(comparefn) {
     delete obj[i];
   }
       
-  Array.prototype.sort.quickSort(obj, 0, definedCount, comparefn);
+  Array.prototype.sort.quicksort_(obj, 0, definedCount, comparefn);
   return obj;
 };
 Object.defineProperty(Array.prototype, 'sort', {enumerable: false});
 
 // Helper functions.
-Array.prototype.sort.insertionSort = function insertionSort(
+Array.prototype.sort.insertionSort_ = function insertionSort_(
     a, from, to, comparefn) {
   // For short (length <= 10) arrays, insertion sort is used for efficiency.
   for (var i = from + 1; i < to; i++) {
@@ -675,10 +675,10 @@ Array.prototype.sort.insertionSort = function insertionSort(
     a[j + 1] = element;
   }
 };
-Object.defineProperty(Array.prototype.sort, 'insertionSort',
+Object.defineProperty(Array.prototype.sort, 'insertionSort_',
                       {enumerable: false});
 
-Array.prototype.sort.getThirdIndex = function getThirdIndex(
+Array.prototype.sort.getThirdIndex_ = function getThirdIndex_(
     a, from, to, comparefn) {
   var t_array = [];
   // Use both 'from' and 'to' to determine the pivot candidates.
@@ -696,21 +696,21 @@ Array.prototype.sort.getThirdIndex = function getThirdIndex(
   var third_index = t_array[t_array.length >> 1][0];
   return third_index;
 };
-Object.defineProperty(Array.prototype.sort, 'getThirdIndex',
+Object.defineProperty(Array.prototype.sort, 'getThirdIndex_',
                       {enumerable: false});
 
-Array.prototype.sort.quickSort = function quickSort(a, from, to, comparefn) {
+Array.prototype.sort.quicksort_ = function quicksort_(a, from, to, comparefn) {
   /* In-place QuickSort algorithm.
    */
   var third_index = 0;
   while (true) {
     // Insertion sort is faster for short arrays.
     if (to - from <= 10) {
-      Array.prototype.sort.insertionSort(a, from, to, comparefn);
+      Array.prototype.sort.insertionSort_(a, from, to, comparefn);
       return;
     }
     if (to - from > 1000) {
-      third_index = Array.prototype.sort.getThirdIndex(a, from, to, comparefn);
+      third_index = Array.prototype.sort.getThirdIndex_(a, from, to, comparefn);
     } else {
       third_index = from + ((to - from) >> 1);
     }
@@ -778,17 +778,17 @@ Array.prototype.sort.quickSort = function quickSort(a, from, to, comparefn) {
       }
     }
     if (to - high_start < low_end - from) {
-      quickSort(a, high_start, to, comparefn);
+      quicksort_(a, high_start, to, comparefn);
       to = low_end;
     } else {
-      quickSort(a, from, low_end, comparefn);
+      quicksort_(a, from, low_end, comparefn);
       from = high_start;
     }
   }
 };
-Object.defineProperty(Array.prototype.sort, 'quickSort', {enumerable: false});
+Object.defineProperty(Array.prototype.sort, 'quicksort_', {enumerable: false});
 
-Array.prototype.toLocaleString = function() {
+Array.prototype.toLocaleString = function toLocaleString() {
   var out = [];
   for (var i = 0; i < this.length; i++) {
     out[i] = (this[i] === null || this[i] === undefined) ?

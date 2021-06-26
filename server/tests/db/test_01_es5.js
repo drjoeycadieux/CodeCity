@@ -1859,7 +1859,7 @@ tests.FunctionConstructor = function() {
   console.assert(f() === undefined, 'new Function() returns callable');
   console.assert(f.length === 0, 'new Function() .length');
   var actual = String(f);
-  var expected = 'function() {}';
+  var expected = 'function anonymous(\n) {\n\n}';
   console.assert(actual === expected, 'new Function() .toString() ' +
       'Actual: "' + actual + '" Expected: "' + expected + '"');
 
@@ -1867,7 +1867,7 @@ tests.FunctionConstructor = function() {
   console.assert(f() === 42, 'new Function simple returns callable');
   console.assert(f.length === 0, 'new Function simple .length');
   actual = String(f);
-  expected = 'function() {return 42;}';
+  expected = 'function anonymous(\n) {\nreturn 42;\n}';
   console.assert(actual === expected, 'new Function simple .toString() ' +
       'Actual: "' + actual + '" Expected: "' + expected + '"');
 
@@ -1875,7 +1875,7 @@ tests.FunctionConstructor = function() {
   console.assert(f(2, 3, 10) === 32, 'new Function with args returns callable');
   console.assert(f.length === 3, 'new Function with args .length');
   actual = String(f);
-  expected = 'function(a, b,c) {return a + b * c;}';
+  expected = 'function anonymous(a, b,c\n) {\nreturn a + b * c;\n}';
   console.assert(actual === expected, 'new Function with args .toString() ' +
       'Actual: "' + actual + '" Expected: "' + expected + '"');
 };
@@ -2690,6 +2690,15 @@ tests.JsonStringify = function () {
       '"null":null,"object":{"obj":{},"arr":[]},"array":[{},[]]}';
   console.assert(JSON.stringify(obj) === str, 'JSON.stringify basic');
 
+  console.assert(JSON.stringify(function(){}) === undefined,
+      'JSON.stringify(function(){})');
+
+  console.assert(JSON.stringify([function(){}]) === '[null]',
+      'JSON.stringify([function(){}])');
+
+  console.assert(JSON.stringify({f: function(){}}) === '{}',
+      'JSON.stringify({f: function(){}})');
+
   str = '{"string":"foo","number":42}';
   console.assert(JSON.stringify(obj, ['string', 'number']) === str,
       'JSON.stringify filter');
@@ -2701,6 +2710,23 @@ tests.JsonStringify = function () {
   str = '{\n--"string": "foo",\n--"number": 42\n}';
   console.assert(JSON.stringify(obj, ['string', 'number'], '--') === str,
       'JSON.stringify pretty string');
+
+  obj = {e: 'enumerable', ne: 'nonenumerable'};
+  Object.defineProperty(obj, 'ne', {enumerable: false});
+  console.assert(JSON.stringify(obj) === '{"e":"enumerable"}',
+      'JSON.stringify nonenumerable');
+
+  console.assert(JSON.stringify(Object.create({foo: 'bar'})) === '{}',
+      'JSON.stringify inherited');
+
+  obj = {};
+  obj.circular = obj;
+  try {
+    JSON.stringify(obj);
+    console.assert(false, "JSON.stringify didn't throw");
+  } catch (e) {
+    console.assert(e.name === 'TypeError', 'JSON.stringify wrong error');
+  }
 };
 
 ///////////////////////////////////////////////////////////////////////////////

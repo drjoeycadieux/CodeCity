@@ -27,16 +27,28 @@ var events = require('events');
 var net = {};
 
 /**
+ * @typedef {{allowHalfOpen: ?boolean}}
+ */
+var createOptions;
+
+/**
+ * @param {(createOptions|function(...))=} options
+ * @param {function(...)=} connectionListener
+ * @return {net.Server}
+ */
+net.createServer = function(options, connectionListener) {};
+
+/**
  * @typedef {{port: (number|undefined),
  *            host: (string|undefined),
  *            localAddress: (string|undefined),
  *            path: (string|undefined),
  *            allowHalfOpen: (boolean|undefined)}}
  */
-net.ConnectOptions;
+var connectOptions;
 
 /**
- * @param {net.ConnectOptions|number|string} arg1
+ * @param {connectOptions|number|string} arg1
  * @param {(function(...)|string)=} arg2
  * @param {function(...)=} arg3
  * @return {!net.Socket}
@@ -48,8 +60,11 @@ net.createConnection = function(arg1, arg2, arg3) {};
 
 /**
  * @constructor
+ * @struct
+ * @param {createOptions=} options
+ * @extends {events.EventEmitter}
  */
-net.Server = function() {};
+net.Server = function(options) {};
 
 /**
  * @return {{port: number, family: string, address: string}}
@@ -72,18 +87,12 @@ net.Server.prototype.close = function(callback) {};
  */
 net.Server.prototype.listen = function(port, host, backlog, callback) {};
 
-/**
- * @param {string} event
- * @param {function(...)} listener
- * @return {net.Server}
- */
-net.Server.prototype.on = function(event, listener) {};
-
 ///////////////////////////////////////////////////////////////////////////////
 // net.Socket
 
 /**
  * @constructor
+ * @struct
  * @param {{fd: ?*, type: ?string, allowHalfOpen: ?boolean}=} options
  * @extends events.EventEmitter
  */
@@ -96,5 +105,13 @@ net.Socket = function(options) {};
  * @return {void}
  */
 net.Socket.prototype.write = function(data, encoding, callback) {};
+
+/**
+ * @param {(string|Buffer)=} data
+ * @param {(string|function(...))=} encoding
+ * @param {function(...)=} callback
+ * @return {void}
+ */
+net.Socket.prototype.end = function(data, encoding, callback) {};
 
 module.exports = net;

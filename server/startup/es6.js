@@ -17,7 +17,7 @@
 
 /**
  * @fileoverview Polyfills to bring the server's partial JavaScript
- * implementation to include some features of JavaScript 6.
+ * implementation to include some features of ECMAScript 2015 (ES6).
  * @author fraser@google.com (Neil Fraser)
  */
 
@@ -85,6 +85,31 @@ var WeakMap = new 'WeakMap';
     }
   }
 })();
+
+///////////////////////////////////////////////////////////////////////////////
+// Object constructor polyfills
+///////////////////////////////////////////////////////////////////////////////
+
+Object.assign = function assign(target, varArgs) {
+  // Polyfill adapted from https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object/assign#polyfill
+  // The length property of the assign method is 2.
+  if (target === null || target === undefined) {
+    throw new TypeError('Cannot convert undefined or null to object');
+  }
+  for (var index = 1; index < arguments.length; index++) {
+    var nextSource = arguments[index];
+    if (nextSource !== null && nextSource !== undefined) {
+      for (var nextKey in nextSource) {
+        // Avoid bugs when hasOwnProperty is shadowed
+        if (Object.prototype.hasOwnProperty.call(nextSource, nextKey)) {
+          to[nextKey] = nextSource[nextKey];
+        }
+      }
+    }
+  }
+  return to;
+};
+
 
 ///////////////////////////////////////////////////////////////////////////////
 // Array constructor polyfills
@@ -168,7 +193,7 @@ Object.defineProperty(Array, 'from', {enumerable: false});
 // Array.prototype polyfills
 ///////////////////////////////////////////////////////////////////////////////
 
-Array.prototype.find = function(callback/*, thisArg*/) {
+Array.prototype.find = function find(callback/*, thisArg*/) {
   // Polyfill copied from:
   // developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Array/find
   if (this === null || this === undefined) {
@@ -190,7 +215,7 @@ Array.prototype.find = function(callback/*, thisArg*/) {
 };
 Object.defineProperty(Array.prototype, 'find', {enumerable: false});
 
-Array.prototype.findIndex = function(callback/*, thisArg*/) {
+Array.prototype.findIndex = function findIndex(callback/*, thisArg*/) {
   // Polyfill copied from:
   // developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Array/findIndex
   if (this === null || this === undefined) {
@@ -235,7 +260,7 @@ Object.defineProperty(Array.prototype, 'findIndex', {enumerable: false});
   // spec bug github.com/tc39/ecma262/issues/289.
   var visited = [];
 
-  Array.prototype.join = function(separator) {
+  Array.prototype.join = function join(separator) {
     // This implements Array.prototype.join from ES6 §22.1.3.12, with
     // the addition of cycle detection as discussed in
     // https://github.com/tc39/ecma262/issues/289.

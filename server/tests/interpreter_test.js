@@ -266,7 +266,7 @@ exports.testHasArgumentsOrEval = function(t) {
     try {
       const ast = Parser.parse(src);
       const firstStatement = ast['body'][0];
-      t.expect(name, hasArgumentsOrEval(firstStatement),
+      t.expect(`${name} ${src}`, hasArgumentsOrEval(firstStatement),
                expected, src);
     } catch (e) {
       t.crash(name, util.format('%s\n%s', src, e.stack));
@@ -275,22 +275,27 @@ exports.testHasArgumentsOrEval = function(t) {
 };
 
 ///////////////////////////////////////////////////////////////////////////////
-// Tests: external simple testcases
+// Tests: run tests from testcases.js.
 ///////////////////////////////////////////////////////////////////////////////
 
 /**
  * Run the simple tests in testcases.js
  * @param {!T} t The test runner object.
  */
-exports.testSimple = function(t) {
+exports.testTestcases = function(t) {
   for (const tc of testcases) {
-    if ('expected' in tc) {
+    if (!('expected' in tc)) {
+      t.skip(tc.name);
+      continue;
+    }
+    if (tc.destructive) {
+      const testOptions = tc.options ? {options: tc.options} : {};
+      runTest(t, tc.name || tc.src, tc.src, tc.expected, testOptions);
+    } else {
       const oldOptions = interpreter.options;
       if (tc.options) interpreter.options = tc.options;
-      runSimpleTest(t, tc.name, tc.src, tc.expected);
+      runSimpleTest(t, tc.name || tc.src, tc.src, tc.expected);
       if (tc.options) interpreter.options = oldOptions;
-    } else {
-      t.skip(tc.name);
     }
   }
 };
@@ -300,46 +305,32 @@ exports.testSimple = function(t) {
 ///////////////////////////////////////////////////////////////////////////////
 
 /**
- * Run a (destructive) test to ensure that 'this' is a primitive in
- * methods invoked on primitives.  (This also tests that interpreter
- * is running in strict mode; in sloppy mode this will be boxed.)
- */
-exports.testStrictBoxedThis = function(t) {
-  let name = 'strictBoxedThis';
-  let src = `
-      String.prototype.foo = function() {return typeof this;};
-      'a primitive string'.foo();
-  `;
-  runTest(t, name, src, 'string');  // Not simple: modifies String.prototype
-};
-
-/**
  * Run some tests of switch statement with fallthrough.
  * @param {!T} t The test runner object.
  */
 exports.testSwitchStatementFallthrough = function(t) {
   const code = `
-      var x = 0;
+      var x = '';
       switch (i) {
         case 1:
-          x += 1;
+          x += '1';
           // fall through
         case 2:
-          x += 2;
+          x += '2';
           // fall through
         default:
-          x += 16;
+          x += 'D';
           // fall through
         case 3:
-          x += 4;
+          x += '3';
           // fall through
         case 4:
-          x += 8;
+          x += '4';
           // fall through
       }
       x;`;
-  const expected = [28, 31, 30, 12, 8];
- for (let i = 0; i < expected.length; i++) {
+  const expected = ['D34', '12D34', '2D34', '34', '4'];
+  for (let i = 0; i < expected.length; i++) {
     const src = 'var i = ' + i + ';\n' + code;
     runSimpleTest(t, 'switch fallthrough ' + i, src, expected[i]);
   }
@@ -561,39 +552,6 @@ exports.testBinaryOp = function(t) {
     const src = tc[0] + ';';
     runSimpleTest(t, 'BinaryExpression: ' + tc[0], src, tc[1]);
   }
-};
-
-/**
- * Run tests of setting the name of an anonymous function in an
- * assignment expression where the LHS is a member expression.  This
- * is CodeCity-specific behaviour controlled by a server flag.
- */
-exports.testFunctionNameSetting = function(t) {
-  // Tests of the methodNames option which causes the functions that
-  // result from evaluating anonymous function expressions to get a
-  // .name when assigned to a property.
-  let name = "Assignment to property doesn't set anonymous function name";
-  let src = `
-      var o = {};
-      o.myMethod = function() {};
-      var gOPD = new 'Object.getOwnPropertyDescriptor';
-      gOPD(o.myMethod, 'name');
-  `;
-  runTest(t, name, src, undefined, {
-    options: {methodNames: false},
-    standardInit: false,  // Save time.
-  });
-
-  name = 'Assignment to property sets anonymous function name';
-  src = `
-      var o = {};
-      o.myMethod = function() {};
-      o.myMethod.name;
-  `;
-  runTest(t, name, src, 'myMethod', {
-    options: {methodNames: true},
-    standardInit: false,  // Save time.
-  });
 };
 
 /**
@@ -1295,21 +1253,6 @@ exports.testClasses = function(t) {
 };
 
 /**
- * Run a destructive test of Function.prototype.toString.
- * @param {!T} t The test runner object.
- */
-exports.testFunctionPrototypeToString = function(t) {
-  let name = 'Funciton.prototype.toString applied to anonymous NativeFunction';
-  let src = `
-      var parent = function parent() {};
-      delete escape.name;
-      Object.setPrototypeOf(escape, parent);
-      escape.toString().replace(/\\s*/g, '');  // Strip whitespace.
-  `;
-  runTest(t, name, src, 'function(){[nativecode]}');  // Modifies escape.
-};
-
-/**
  * Run a test of multiple simultaneous calls to Array.prototype.join.
  * @param {!T} t The test runner object.
  */
@@ -1357,10 +1300,11 @@ exports.testNumberToString = function(t) {
 };
 
 /**
- * Run tests of the networking subsystem.
+ * Run tests of the server side of the networking subsystem
+ * (connectionListen et al.)
  * @param {!T} t The test runner object.
  */
-exports.testNetworking = async function(t) {
+exports.testServing = async function(t) {
   // Run a test of connectionListen() and connectionUnlisten(), and
   // of the server receiving data using the .receive and .end methods
   // on a connection object.
@@ -1371,6 +1315,7 @@ exports.testNetworking = async function(t) {
         data += d;
       };
       conn.onEnd = function() {
+        CC.connectionClose(this);
         CC.connectionUnlisten(8888);
         resolve(data);
       };
@@ -1437,13 +1382,16 @@ exports.testNetworking = async function(t) {
   // Check to make sure that connectionListen() throws if attempting
   // to bind to an invalid port or rebind a port already in use.
   name = 'testConnectionListenThrows';
+  const server = new net.Server();
+  server.listen(8887);
   src = `
       // Some invalid ports:
-      // * 9999 will be in-use by us, should be rejected by connectionListen.
+      // * 8887 is in use by the above net.Server.
+      // * 8888 will be in-use by via previous connectionListen.
       // * Others are not integers or are out-of-range.
-      var ports = ['foo', {}, -1, 80.8, 9999, 65536];
+      var ports = ['foo', {}, -1, 80.8, 8887, 8888, 65536];
       try {
-        CC.connectionListen(9999, {});
+        CC.connectionListen(8888, {});
         for (var i = 0; i < ports.length; i++) {
           try {
             CC.connectionListen(ports[i], {});
@@ -1455,19 +1403,20 @@ exports.testNetworking = async function(t) {
           }
         }
       } finally {
-        CC.connectionUnlisten(9999);
+        CC.connectionUnlisten(8888);
       }
       resolve('OK');
    `;
   await runAsyncTest(t, name, src, 'OK', {options: {noLog: ['net']}});
+  server.close();
 
   // Check to make sure that connectionUnlisten() throws if attempting
   // to unbind an invalid or not / no longer bound port.
   name = 'testConnectionUnlistenThrows';
   src = `
-      var ports = ['foo', {}, -1, 22, 80.8, 4567, 65536];
-      CC.connectionListen(9999, {});
-      CC.connectionUnlisten(9999, {});
+      var ports = ['foo', {}, -1, 22, 80.8, 4567, 8888, 65536];
+      CC.connectionListen(8888, {});
+      CC.connectionUnlisten(8888, {});
       for (var i = 0; i < ports.length; i++) {
         try {
           CC.connectionUnlisten(ports[i], {});
@@ -1528,13 +1477,79 @@ exports.testNetworking = async function(t) {
     onCreate: createReceive,
   });
 
+  // Run a test to make sure listening sockets survive the interpreter
+  // being paused and restarted.
+  name = 'testServerPauseStart';
+  src = `
+      var data = '', conn = {};
+      conn.onReceive = function(d) {
+        data += d;
+      };
+      conn.onEnd = function() {
+        CC.connectionClose(this);
+        CC.connectionUnlisten(8888);
+        resolve(data);
+      };
+      CC.connectionListen(8888, conn);
+      pause();
+      send();
+   `;
+  function createPauseAndSend(intrp) {
+    intrp.global.createMutableBinding('pause', intrp.createNativeFunction(
+        'pause', function() {
+          intrp.pause();
+          intrp.start();
+        }));
+    createSend(intrp);
+  };
+  await runAsyncTest(t, name, src, 'foobar', {
+    options: {noLog: ['net']},
+    onCreate: createPauseAndSend
+  });
+
+  // Run a test to make sure listening sockets are re-listened after
+  // the interpreter is stopped and restarted.
+  name = 'testServerStopStart';
+  src = `
+      var data = '', conn = {};
+      conn.onReceive = function(d) {
+        data += d;
+      };
+      conn.onEnd = function() {
+        CC.connectionClose(this);
+        CC.connectionUnlisten(8888);
+        resolve(data);
+      };
+      CC.connectionListen(8888, conn);
+      stop();
+      send();
+   `;
+  function createStopAndSend(intrp) {
+    intrp.global.createMutableBinding('stop', intrp.createNativeFunction(
+        'stop', function() {
+          intrp.stop();
+          intrp.start();
+        }));
+    createSend(intrp);
+  };
+  await runAsyncTest(t, name, src, 'foobar', {
+    options: {noLog: ['net']},
+    onCreate: createStopAndSend
+  });
+};
+
+/**
+ * Run tests of the client side of the networking subsystem (xhr).
+ * @param {!T} t The test runner object.
+ */
+exports.testClient = async function(t) {
   // Run test of the xhr() function using HTTP.
-  name = 'testXhrHttp';
+  let name = 'testXhrHttp';
   const httpTestServer = http.createServer(function (req, res) {
     res.writeHead(200, {'Content-Type': 'text/plain'});
     res.end('OK HTTP: ' + req.url);
   }).listen(9980);
-  src = `
+  let src = `
       try {
         resolve(CC.xhr('http://localhost:9980/foo'));
       } catch (e) {

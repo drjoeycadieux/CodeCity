@@ -40,7 +40,8 @@ regexps.escapes = /\\(?:["'\\\/0bfnrtv]|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2})/g;
  * @const
  */
 regexps.singleQuotedString =
-    new RegExp("'(?:[^'\\\\]|" + regexps.escapes.source + ")*'", 'g');
+    new RegExp("'(?:[^'\\\\\\r\\n\\u2028\\u2029]|" +
+               regexps.escapes.source + ")*'", 'g');
 
 /**
  * Matches a double-quoted string literal, like '"this one"' and
@@ -48,7 +49,8 @@ regexps.singleQuotedString =
  * @const
  */
 regexps.doubleQuotedString =
-    new RegExp('"(?:[^"\\\\]|' + regexps.escapes.source + ')*"', 'g');
+    new RegExp('"(?:[^"\\\\\\r\\n\\u2028\\u2029]|' +
+               regexps.escapes.source + ')*"', 'g');
 
 /**
  * Matches a string literal, like "'this one' and '"that one"' as well
@@ -67,9 +69,10 @@ regexps.string = new RegExp('(?:' + regexps.singleQuotedString.source + '|' +
 regexps.stringExact = new RegExp('^' + regexps.string.source + '$');
 
 /**
- * RegExp matching a valid JavaScript identifier.  Note that this is
- * fairly conservative, because ANY Unicode letter can appear in an
- * identifier - but the full regexp is absurdly complicated.
+ * RegExp matching a valid JavaScript identifier (strictly an
+ * IdentifierName, which does not exclude ReservedWord).  Note that
+ * this is fairly conservative, because ANY Unicode letter can appear
+ * in an identifier - but the full regexp is absurdly complicated.
  * @const
  */
 regexps.identifier = /[A-Za-z_$][A-Za-z0-9_$]*/g;

@@ -37,6 +37,12 @@ $.root.toString = function toString() {
   return 'root';
 };
 
+$.physicals = (new 'Object.create')(null);
+
+$.physicals.Maximilian = {};
+
+$.physicals.Neil = {};
+
 $.system = {};
 $.system.log = new 'CC.log';
 $.system.checkpoint = new 'CC.checkpoint';
@@ -52,8 +58,9 @@ $.system.onStartup = function onStartup() {
    * listening sockets, etc.)
    */
   // Listen on various sockets.
-  try {$.system.connectionListen(7777, $.servers.telnet.connection);} catch(e) {}
-  try {$.system.connectionListen(7780, $.servers.http.connection);} catch(e) {}
+  try {$.system.connectionListen(7776, $.servers.login.connection, 100);} catch(e) {}
+  try {$.system.connectionListen(7777, $.servers.telnet.connection, 100);} catch(e) {}
+  try {$.system.connectionListen(7780, $.servers.http.connection, 100);} catch(e) {}
   try {$.system.connectionListen(9999, $.servers.eval.connection);} catch(e) {}
   $.system.log('Startup: listeners started.');
 
@@ -68,28 +75,25 @@ $.system.onStartup = function onStartup() {
   $.Selector.db.populate();
   $.system.log('Startup: Selector reverse-lookup DB rebuilt.');
 };
-Object.setOwnerOf($.system.onStartup, {});
-Object.setOwnerOf($.system.onStartup.prototype, Object.getOwnerOf($.system.onStartup));
+Object.setOwnerOf($.system.onStartup, $.physicals.Neil);
+Object.setOwnerOf($.system.onStartup.prototype, $.physicals.Maximilian);
 
 var user = function user() {
-  // The global user() is intended to be used to find the current
-  // "user" object from deeply-nested functions (to which it is
-  // impractical to thread cmd.user, for whatever reason).
-  //
-  // Previously user was a global variable set to the current user
-  // object by $.servers.telnet.connection.onReceiveLine, but this
-  // can cause problems when one command's execution suspends and
-  // another user's command runs in mean time.
-  //
-  // It is preferable to avoid using this function; instead, use
-  // cmd.user or this where possible.
-	$.system.log('Auditing user() usage:\n' + (new Error()).stack);
+  /* The global user() is intended to be used to find the current
+   * user object from deeply-nested functions (to which it is
+   * impractical to thread cmd.user, for whatever reason).
+   *
+   * Previously user was a global variable set to the current user
+   * object by $.servers.telnet.connection.onReceiveLine, but this
+   * can cause problems when one command's execution suspends and
+   * another user's command runs in mean time.
+   *
+   * It is preferable to avoid using this function; instead, use
+   * cmd.user or this where possible.
+   */
+  $.system.log('Auditing user() usage:\n' + (new Error()).stack);
   return Object.getOwnerOf(Thread.current());
 };
-user.prototype.constructor = function user() {
-  return Object.getOwnerOf(Thread.current());
-};
-user.prototype.constructor.prototype = user.prototype;
 
 $.utils = {};
 

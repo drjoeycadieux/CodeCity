@@ -21,6 +21,7 @@
  */
 'use strict';
 
+var events = require('events');
 var IterableWeakMap = require('./iterable_weakmap');
 var net = require('net');
 var http = require('http');
@@ -43,6 +44,7 @@ var SERIALIZATION_VERSION = 1;
 /**
  * Create a new interpreter.
  * @constructor
+ * @struct
  * @param {!Interpreter.Options=} options
  */
 var Interpreter = function(options) {
@@ -81,6 +83,29 @@ var Interpreter = function(options) {
    */
   this.global = new Interpreter.Scope(Interpreter.Scope.Type.GLOBAL,
       /** @type {?} */ (undefined), null, undefined);
+
+  // Declare properties that wil be initialised by initBuiltins_.
+  /** @type {!Interpreter.prototype.Object} */ this.OBJECT;
+  /** @type {!Interpreter.Owner} */ this.ROOT;
+  /** @type {!Interpreter.prototype.Function} */ this.FUNCTION;
+  /** @type {!Interpreter.prototype.Array} */ this.ARRAY;
+  /** @type {!Interpreter.prototype.Object} */ this.STRING;
+  /** @type {!Interpreter.prototype.Object} */ this.BOOLEAN;
+  /** @type {!Interpreter.prototype.Object} */ this.NUMBER;
+  /** @type {!Interpreter.prototype.Object} */ this.DATE;
+  /** @type {!Interpreter.prototype.Object} */ this.REGEXP;
+  /** @type {!Interpreter.prototype.Error} */ this.ERROR;
+  /** @type {!Interpreter.prototype.Error} */ this.EVAL_ERROR;
+  /** @type {!Interpreter.prototype.Error} */ this.RANGE_ERROR;
+  /** @type {!Interpreter.prototype.Error} */ this.REFERENCE_ERROR;
+  /** @type {!Interpreter.prototype.Error} */ this.SYNTAX_ERROR;
+  /** @type {!Interpreter.prototype.Error} */ this.TYPE_ERROR;
+  /** @type {!Interpreter.prototype.Error} */ this.URI_ERROR;
+  /** @type {!Interpreter.prototype.Error} */ this.PERM_ERROR;
+  /** @type {!Interpreter.prototype.Object} */ this.WEAKMAP;
+  /** @type {!Interpreter.prototype.Object} */ this.THREAD;
+  /** @type {!Interpreter.Owner} */ this.ANYBODY;
+
   // Create builtins and (minimally) initialize global scope:
   this.initBuiltins_();
 
@@ -112,6 +137,9 @@ var Interpreter = function(options) {
   this.previousTime_ = 0;
   /** @private @type {number} */
   this.cumulativeTime_ = 0;
+  /** @private @type {!Array<number>} */
+  this.hrStartTime_;  // Initialised by pause.
+
   this.pause();
 };
 
@@ -342,8 +370,9 @@ Interpreter.prototype.step_ = function(thread, stack) {
 };
 
 /**
- * If interpreter status is RUNNING, use setTimeout to repeatedly call
- * .run() until there are no more sleeping threads.
+ * If interpreter status is RUNNING, use setTimeout to arrange for
+ * .run() to be called repeatedly until there are no more sleeping
+ * threads.
  * @private
  */
 Interpreter.prototype.go_ = function() {
@@ -419,7 +448,8 @@ Interpreter.prototype.pause = function() {
       for (var port in this.listeners_) {
         var intrp = this;
         var server = this.listeners_[Number(port)];
-        server.listen(undefined, function(error) {
+        server.listen(function(error) {
+          if (!error) return;
           // Something went wrong while re-listening.  Maybe port in use.
           intrp.log('net', 'Re-listen on port %s failed: %s: %s', server.port,
                     error.name, error.message);
@@ -580,8 +610,6 @@ Interpreter.prototype.initBuiltins_ = function() {
   this.initPerms_();
 
   // Initialize ES standard global functions.
-  var intrp = this;
-
   var eval_ = new this.NativeFunction({
     id: 'eval', length: 1,
     /** @type {!Interpreter.NativeCallImpl} */
@@ -628,6 +656,7 @@ Interpreter.prototype.initBuiltins_ = function() {
     [decodeURI, 'decodeURI'], [decodeURIComponent, 'decodeURIComponent'],
     [encodeURI, 'encodeURI'], [encodeURIComponent, 'encodeURIComponent']
   ];
+  var intrp = this;
   for (var i = 0; i < strFunctions.length; i++) {
     var wrapper = (function(nativeFunc) {
       return function(str) {
@@ -676,8 +705,6 @@ Interpreter.prototype.initObject_ = function() {
       return this.construct.call(this, intrp, thread, state, args);
     }
   });
-
-  var intrp = this;
 
   // Static methods on Object.
   this.createNativeFunction('Object.is', Object.is, false);
@@ -908,32 +935,22 @@ Interpreter.prototype.initObject_ = function() {
 Interpreter.prototype.initFunction_ = function() {
   var intrp = this;
   var wrapper;
-  var identifierRegexp = /^[A-Za-z_$][\w$]*$/;
   // Function constructor.
   new this.NativeFunction({
     id: 'Function', length: 1,
     /** @type {!Interpreter.NativeConstructImpl} */
     construct: function(intrp, thread, state, args) {
-      var argList = args.slice();
-      if (args.length) {
-        var code = String(argList.pop());
-      } else {
-        var code = '';
-      }
-      var argsStr = argList.join(',').trim();
-      if (argsStr) {
-        argsStr.split(/\s*,\s*/).map(function(name) {
-          if (!identifierRegexp.test(name)) {
-            throw new intrp.Error(state.scope.perms, intrp.SYNTAX_ERROR,
-                'Invalid function argument: ' + name);
-          }
-        });
-        argsStr = argList.join(',');
-      }
-      // Acorn needs to parse code in the context of a function or
-      // else 'return' statements will be syntax errors.
-      code = '(function(' + argsStr + ') {' + code + '})';
-      var ast = intrp.compile_(code, state.scope.perms);
+      args = args.slice();  // Copy, so we can .pop safely.
+      var body = args.length ? String(args.pop()) : '';
+      // Concatenate formal parameter names.  Let Acorn verify they
+      // are valid Identifiers.
+      var argsStr = args.map(function(arg) {return String(arg);}).join(',');
+      // Acorn needs to parse body in the context of a function or
+      // else 'return' statements will be syntax errors.  The name
+      // "anonymous" and extra line breaks were standardised in ES2019
+      // via https://tc39.es/Function-prototype-toString-revision/
+      var source = '(function anonymous(' + argsStr + '\n) {\n' + body + '\n})';
+      var ast = intrp.compile_(source, state.scope.perms);
       if (ast['body'].length !== 1) {
         // Function('a', 'return a + 6;}; {alert(1);');
         // TODO: there must be a cleaner way to detect this!
@@ -943,7 +960,7 @@ Interpreter.prototype.initFunction_ = function() {
       // Interestingly, the scope for constructed functions is the global
       // scope, even if they were constructed in some other scope.
       return new intrp.UserFunction(ast['body'][0]['expression'],
-          intrp.global, new Interpreter.Source(code), state.scope.perms);
+          intrp.global, new Interpreter.Source(source), state.scope.perms);
     },
     /** @type {!Interpreter.NativeCallImpl} */
     call: function(intrp, thread, state, thisVal, args) {
@@ -1437,23 +1454,18 @@ Interpreter.prototype.initArray_ = function() {
     id: 'Array.prototype.toString', length: 0,
     /** @type {!Interpreter.NativeCallImpl} */
     call: function(intrp, thread, state, thisVal, args) {
-      if (!state.info_.funcState) {  // First visit: call .join().
-        state.info_.funcState = true;
-        var perms = state.scope.perms;
-        var obj = intrp.toObject(thisVal, perms);
-        var join = obj.get('join', perms);
-        if (join instanceof intrp.Function) {
-          var func = join;
-        } else {
-          func = /** @type {!Interpreter.prototype.Function} */ (
-              intrp.builtins.get('Object.prototype.toString'));
-        }
-        var newState = Interpreter.State.newForCall(func, thisVal, [], perms);
-        thread.stateStack_.push(newState);
-        return Interpreter.FunctionResult.CallAgain;
-      } else {  // Second visit: return value returned by .join().
-        return state.value;
+      var perms = state.scope.perms;
+      var obj = intrp.toObject(thisVal, perms);
+      var join = obj.get('join', perms);
+      if (join instanceof intrp.Function) {
+        var func = join;
+      } else {
+        func = /** @type {!Interpreter.prototype.Function} */ (
+            intrp.builtins.get('Object.prototype.toString'));
       }
+      var newState = Interpreter.State.newForCall(func, thisVal, [], perms);
+      thread.stateStack_.push(newState);
+      return Interpreter.FunctionResult.AwaitValue;
     }
   });
 
@@ -1568,7 +1580,7 @@ Interpreter.prototype.initString_ = function() {
   var thisStringValue = function(intrp, value, name, perms) {
     if (typeof value === 'string') {  // String primitive.
       return value;
-    } else if (value === intrp.STRING) {  // The only Boolen object.
+    } else if (value === intrp.STRING) {  // The only String object.
       return '';
     }
     throw new intrp.Error(perms, intrp.TYPE_ERROR,
@@ -1866,7 +1878,7 @@ Interpreter.prototype.initDate_ = function() {
     }
     // Called as new Date().
     var args = [null].concat(Array.from(arguments));
-    var date = new (Function.prototype.bind.apply(Date, args));
+    var date = new (Function.prototype.bind.apply(Date, args))();
     return new intrp.Date(date, intrp.thread_.perms());
   };
   this.createNativeFunction('Date', wrapper, true);
@@ -1937,13 +1949,45 @@ Interpreter.prototype.initRegExp_ = function() {
   // (In ES5 it had [[Class]] RegExp.)
   this.REGEXP = new this.Object(this.ROOT);
   this.builtins.set('RegExp.prototype', this.REGEXP);
+
   // RegExp constructor.
-  wrapper = function(pattern, flags) {
-    pattern = pattern ? pattern.toString() : '';
-    flags = flags ? flags.toString() : '';
-    return new intrp.RegExp(new RegExp(pattern, flags), intrp.thread_.perms());
-  };
-  this.createNativeFunction('RegExp', wrapper, true);
+  new this.NativeFunction({
+    id: 'RegExp', length: 1,
+    /** @type {!Interpreter.NativeCallImpl} */
+    call: function(intrp, thread, state, thisVal, args) {
+      var pattern = args[0];
+      var flags = args[1];
+      if (pattern instanceof intrp.RegExp && flags === undefined) {
+        // Per ES6 §21.2.3.1 step 4.b, (now
+        // https://tc39.es/ecma262/#sec-regexp-constructor step 2.b),
+        // check pattern.constructor to see if it's RegExp.
+        var patternConstructor = pattern.get('constructor', state.scope.perms);
+        if (patternConstructor === this) return pattern;
+      }
+      return this.construct.call(this, intrp, thread, state, args);
+    },
+    /** @type {!Interpreter.NativeConstructImpl} */
+    construct: function(intrp, thread, state, args) {
+      var pattern = args[0];
+      var flags = args[1];
+      var perms = state.scope.perms;
+      if (pattern instanceof intrp.RegExp) {
+        pattern = pattern.regexp.source;
+        // ES5.1 required that TypeError be thown here if flags !==
+        // undefined, but ES6 and later do not.
+      }
+      // TODO(ES6): ES6 §21.2.3.1 step 6 (now
+      // https://tc39.es/ecma262/#sec-regexp-constructor step 5).
+      pattern = (pattern === undefined ? '' : String(pattern));
+      flags = (flags === undefined ? '' : String(flags));
+      // TODO(ES6): also accept [uy]; ES8: [s], soon: [p].
+      if (!/^(?:([gim])(?!.*\1))*$/.test(flags)) {  // Reject repeated flags.
+        throw new intrp.Error(perms, intrp.SYNTAX_ERROR,
+            "Invalid flags supplied to RegExp constructor '" + flags + "'");
+      }
+      return new intrp.RegExp(new RegExp(pattern, flags), perms);
+    }
+  });
 
   new this.NativeFunction({
     id: 'RegExp.prototype.toString', length: 0,
@@ -1964,7 +2008,7 @@ Interpreter.prototype.initRegExp_ = function() {
         !(this.regexp instanceof RegExp)) {
       throw new intrp.Error(intrp.thread_.perms(), intrp.TYPE_ERROR,
           'Method RegExp.prototype.exec called on incompatible receiver' +
-              this.toString());
+              this);
     }
     return this.regexp.test(str);
   };
@@ -1977,7 +2021,7 @@ Interpreter.prototype.initRegExp_ = function() {
           'Method RegExp.prototype.exec called on incompatible receiver ' +
           this);
     }
-    str = str.toString();
+    str = String(str);
     // Get lastIndex from wrapped regex, since this is settable.
     this.regexp.lastIndex = this.get('lastIndex', perms);
     var match = this.regexp.exec(str);
@@ -2018,6 +2062,7 @@ Interpreter.prototype.initError_ = function() {
         // Use intrp[protoKey] instead of proto because
         // deserialisation will set up intrp.ERROR et al correctly but
         // can't modify values of variables in native closures.
+        /** @suppress {checkTypes} */
         var err = new intrp.Error(perms, intrp[protoKey], message);
         err.makeStack(thread.callers(perms).slice(1), perms);
         return err;
@@ -2068,7 +2113,7 @@ Interpreter.prototype.initJSON_ = function() {
   var wrapper;
   wrapper = function(text) {
     try {
-      var nativeObj = JSON.parse(text.toString());
+      var nativeObj = JSON.parse(String(text));
     } catch (e) {
       throw intrp.errorNativeToPseudo(e, intrp.thread_.perms());
     }
@@ -2125,10 +2170,24 @@ Interpreter.prototype.initWeakMap_ = function() {
   });
 
   // Properties of the WeakMap prototype object.
+
   /**
-   * Decorator to add standard permission and type checks for HashMap
+   * A narrowing of Interpreter.NativeCallImpl for decorated WeakMap
+   * .call implementations.
+   * @typedef {function(this: Interpreter.prototype.NativeFunction,
+   *                    !Interpreter,
+   *                    !Interpreter.Thread,
+   *                    !Interpreter.State,
+   *                    !Interpreter.prototype.WeakMap,
+   *                    !Array<?Interpreter.Value>)
+   *               : (?Interpreter.Value|!Interpreter.FunctionResult)}
+   */
+  var WeakMapCallImpl;
+  
+  /**
+   * Decorator to add standard permission and type checks for WeakMap
    * prototype methods.
-   * @param {!Interpreter.NativeCallImpl} func Function to decorate.
+   * @param {!WeakMapCallImpl} func Function to decorate.
    * @param {string=} name Name of decorated function (default:
    *     func.name).  (N.B. needed because 'delete' is a reserve word.
    * @return {!Interpreter.NativeCallImpl} The decorated function.)
@@ -2152,7 +2211,6 @@ Interpreter.prototype.initWeakMap_ = function() {
 
   new this.NativeFunction({
     id: 'WeakMap.prototype.delete', length: 1,
-    /** @type {!Interpreter.NativeCallImpl} */
     call: withChecks(function(intrp, thread, state, thisVal, args) {
       return thisVal.weakMap.delete(args[0]);
     }, 'delete')
@@ -2160,7 +2218,6 @@ Interpreter.prototype.initWeakMap_ = function() {
 
   new this.NativeFunction({
     id: 'WeakMap.prototype.get', length: 1,
-    /** @type {!Interpreter.NativeCallImpl} */
     call: withChecks(function get(intrp, thread, state, thisVal, args) {
       return thisVal.weakMap.get(args[0]);
     })
@@ -2168,7 +2225,6 @@ Interpreter.prototype.initWeakMap_ = function() {
 
   new this.NativeFunction({
     id: 'WeakMap.prototype.has', length: 1,
-    /** @type {!Interpreter.NativeCallImpl} */
     call: withChecks(function has(intrp, thread, state, thisVal, args) {
       return thisVal.weakMap.has(args[0]);
     })
@@ -2176,7 +2232,6 @@ Interpreter.prototype.initWeakMap_ = function() {
 
   new this.NativeFunction({
     id: 'WeakMap.prototype.set', length: 2,
-    /** @type {!Interpreter.NativeCallImpl} */
     call: withChecks(function set(intrp, thread, state, thisVal, args) {
       thisVal.weakMap.set(args[0], args[1]);
       return thisVal;
@@ -2285,10 +2340,24 @@ Interpreter.prototype.initThread_ = function() {
   });
 
   // Properties of the Thread prototype object.
+
+  /**
+   * A narrowing of Interpreter.NativeCallImpl for decorated Thread
+   * .call implementations.
+   * @typedef {function(this: Interpreter.prototype.NativeFunction,
+   *                    !Interpreter,
+   *                    !Interpreter.Thread,
+   *                    !Interpreter.State,
+   *                    !Interpreter.prototype.Thread,
+   *                    !Array<?Interpreter.Value>)
+   *               : (?Interpreter.Value|!Interpreter.FunctionResult)}
+   */
+  var ThreadCallImpl;
+
   /**
    * Decorator to add standard permission and type checks for Thread
    * prototype methods.
-   * @param {!Interpreter.NativeCallImpl} func Function to decorate.
+   * @param {!ThreadCallImpl} func Function to decorate.
    * @return {!Interpreter.NativeCallImpl} The decorated function.)
    */
   var withChecks = function(func) {
@@ -2307,7 +2376,6 @@ Interpreter.prototype.initThread_ = function() {
 
   new this.NativeFunction({
     id: 'Thread.prototype.getTimeLimit', length: 0,
-    /** @type {!Interpreter.NativeCallImpl} */
     call: withChecks(function getTimeLimit(
         intrp, thread, state, thisVal, args) {
       return thisVal.thread.timeLimit;
@@ -2319,7 +2387,6 @@ Interpreter.prototype.initThread_ = function() {
   // existing limit.
   new this.NativeFunction({
     id: 'Thread.prototype.setTimeLimit', length: 1,
-    /** @type {!Interpreter.NativeCallImpl} */
     call: withChecks(function setTimeLimit(
         intrp, thread, state, thisVal, args) {
       var limit = args[0];
@@ -2408,6 +2475,7 @@ Interpreter.prototype.initPerms_ = function() {
       // TODO(cpcallen:perms): throw if current perms does not
       // control obj and (new) owner.
       obj.owner = /** @type {?Interpreter.Owner} */(owner);
+      return obj;
     }
   });
 };
@@ -2417,8 +2485,6 @@ Interpreter.prototype.initPerms_ = function() {
  * @private
  */
 Interpreter.prototype.initNetwork_ = function() {
-  var intrp = this;
-
   new this.NativeFunction({
     id: 'CC.connectionListen', length: 2,
     /** @type {!Interpreter.NativeCallImpl} */
@@ -2442,10 +2508,12 @@ Interpreter.prototype.initNetwork_ = function() {
       var server = new intrp.Server(perms, port, proto, timeLimit);
       intrp.listeners_[port] = server;
       var rr = intrp.getResolveReject(thread, state);
-      server.listen(function() {
-        rr.resolve();
-      }, function(e) {
-        rr.reject(intrp.errorNativeToPseudo(e, perms), perms);
+      server.listen(function(error) {
+        if (!error) {
+          rr.resolve();
+        } else {
+          rr.reject(intrp.errorNativeToPseudo(error, perms), perms);
+        }
       });
       return Interpreter.FunctionResult.Block;
     }
@@ -2463,19 +2531,13 @@ Interpreter.prototype.initNetwork_ = function() {
         throw new intrp.Error(perms, intrp.RANGE_ERROR, 'port not listening');
       }
       if (!(intrp.listeners_[port].server_ instanceof net.Server)) {
-        throw new Error('server already closed??');
+        throw new Error('no net.Serfer object for port %s??', port);
       }
       var rr = intrp.getResolveReject(thread, state);
-      intrp.listeners_[port].unlisten(function(e) {
+      intrp.listeners_[port].unlisten(function() {
+        // Socket (and all open connections on it) now closed.
         delete intrp.listeners_[/** @type {number} */(port)];
-        if (e instanceof Error) {
-          // Somehow something has gone wrong.  (Maybe mulitple
-          // concurrent calls to .close on the same net.Server?)
-          rr.reject(intrp.errorNativeToPseudo(e, perms), perms);
-        } else {
-          // All socket (and all open connections on it) now closed.
-          rr.resolve();
-        }
+        rr.resolve();
       });
       return Interpreter.FunctionResult.Block;
     }
@@ -2600,25 +2662,20 @@ Interpreter.toLength = function toLength(value) {
 
 /**
  * Create a new native function.  Function will be owned by root.
- * @param {string} name Name of new function.
- * @param {!Function} nativeFunc JavaScript function.
+ * @param {string} id ID to register new function in builtins registry.
+ * @param {!Function} nativeFunc Any JavaScript function.
  * @param {boolean} legalConstructor True if the function can be used as a
  *     constructor (e.g. Array), false if not (e.g. escape).
  * @return {!Interpreter.prototype.Function} New function.
 */
 Interpreter.prototype.createNativeFunction = function(
-    name, nativeFunc, legalConstructor) {
+    id, nativeFunc, legalConstructor) {
   if (nativeFunc instanceof this.Object) {
     throw new TypeError('createNativeFunction passed non-native function??');
   }
   // Make sure impl function has an id for serialization.
-  if (!nativeFunc.id) {
-    nativeFunc.id = name;
-  }
-  var func = new this.OldNativeFunction(nativeFunc, legalConstructor);
-  func.setName(name.replace(/^.*\./, ''));
-  this.builtins.set(name, func);
-  return func;
+  if (!nativeFunc.id) nativeFunc.id = id;
+  return new this.OldNativeFunction(nativeFunc, legalConstructor, {id: id});
 };
 
 /**
@@ -2717,10 +2774,10 @@ Interpreter.prototype.pseudoToNative = function(pseudoObj, cycles) {
     return pseudoObj;
   } else if (!(pseudoObj instanceof this.Object)) {
     throw new TypeError('pseudoToObject called on wrong type??');
-  }
-
-  if (pseudoObj instanceof this.RegExp) {  // Regular expression.
+  } else if (pseudoObj instanceof this.RegExp) {  // Regular expression.
     return pseudoObj.regexp;
+  } else if (pseudoObj instanceof this.Function) {  // Function.
+    return undefined;
   }
 
   if (!cycles) {
@@ -2731,29 +2788,18 @@ Interpreter.prototype.pseudoToNative = function(pseudoObj, cycles) {
     return cycles.native[i];
   }
   cycles.pseudo[cycles.pseudo.length] = pseudoObj;
-  var nativeObj;
-  if (pseudoObj instanceof this.Array) {  // Array.
-    nativeObj = [];
-    cycles.native[cycles.native.length] = nativeObj;
-    var length = pseudoObj.get('length', perms);
-    for (i = 0; i < length; i++) {
-      // TODO(cpcallen): do we really want to include inherited properties?
-      if (pseudoObj.has(String(i), perms)) {
-        nativeObj[i] =
-            this.pseudoToNative(pseudoObj.get(String(i), perms), cycles);
-      }
-    }
-  } else {  // Object.
-    nativeObj = {};
-    cycles.native[cycles.native.length] = nativeObj;
-    var keys = pseudoObj.ownKeys(perms);
-    for (i = 0; i < keys.length; i++) {
-      var key = keys[i];
-      var val = pseudoObj.get(key, perms);
-      Object.defineProperty(nativeObj, key,
-          {writable: true, enumerable: true, configurable: true,
-           value: this.pseudoToNative(val, cycles)});
-    }
+  var nativeObj = pseudoObj instanceof this.Array ? [] : {};
+  cycles.native[cycles.native.length] = nativeObj;
+  var keys = pseudoObj.ownKeys(perms);
+  for (i = 0; i < keys.length; i++) {
+    var key = keys[i];
+    var pd = pseudoObj.getOwnPropertyDescriptor(key, perms);
+    Object.defineProperty(nativeObj, key, {
+      writable: pd.writable,
+      enumerable: pd.enumerable,
+      configurable: pd.configurable,
+      value: this.pseudoToNative(pd.value, cycles)
+    });
   }
   cycles.pseudo.pop();
   cycles.native.pop();
@@ -3196,6 +3242,7 @@ Interpreter.CompletionType = {
  * immediately available (e.g., in the case of a user function that
  * needs to be evaluated, or an async function that blocks).
  * @constructor
+ * @struct
  */
 Interpreter.FunctionResult = function() {};
 /**
@@ -3291,6 +3338,7 @@ Interpreter.NativeConstructImpl;
  * An iterator over the properties of an ObjectLike and its
  * prototypes, following the usual for-in loop rules.
  * @constructor
+ * @struct
  * @param {!Interpreter.ObjectLike} obj Object or Box whose properties
  *     are to be iterated over.
  * @param {!Interpreter.Owner} perms Who is doing the iteration?
@@ -3344,6 +3392,8 @@ Interpreter.PropertyIterator.prototype.next = function() {
 /**
  * Class for a scope.  Implements Lexical Environments and the
  * Environment Record specification type from E5.1 §10.2 / ES6 §8.1.
+ * @constructor
+ * @struct
  * @param {!Interpreter.Scope.Type} type What variety of scope is it?
  * @param {!Interpreter.Owner} perms The permissions with which code
  *     in the current scope is executing.
@@ -3352,7 +3402,6 @@ Interpreter.PropertyIterator.prototype.next = function() {
  * @param {?Interpreter.Value=} thisVal Value of 'this' in scope.
  *     (Default: copy value from outerScope.  N.B.: passing undefined
  *     is NOT treated the same as passing no value!)
- * @constructor
  */
 Interpreter.Scope = function(type, perms, outerScope, thisVal) {
   /** @type {!Interpreter.Scope.Type} */
@@ -3506,6 +3555,7 @@ Interpreter.Scope.Type = {
  * original source text.  Such sliced objects "remember" their
  * position within the original source text.
  * @constructor
+ * @struct
  * @param {string} src Some source text
  * @param {number=} offset_ For internal use only.
  */
@@ -3568,11 +3618,12 @@ Interpreter.Source.prototype.lineColForPos = function(pos) {
 
 /**
  * Class for a state.
+ * @constructor
+ * @struct
  * @param {!Node} node AST node for the state.
  * @param {!Interpreter.Scope} scope Scope dictionary for the state.
  * @param {boolean=} wantRef Does parent state want reference (rather
  *     than evaluated value)?  (Default: false.)
- * @constructor
  */
 Interpreter.State = function(node, scope, wantRef) {
   /** @const {!Node} */
@@ -3693,6 +3744,7 @@ Interpreter.State.prototype.frame = function() {
  * serves as a user-visible wrapper for this class.  The two are
  * separate for performance reasons only.
  * @constructor
+ * @struct
  * @param {number} id Thread ID.  Should correspond to index of this
  *     thread in .threads_ array.
  * @param {!Interpreter.State} state Starting state for thread.
@@ -3881,6 +3933,7 @@ Interpreter.ObjectLike.prototype.valueOf = function() {};
 
 /**
  * @constructor
+ * @struct
  * @implements {Interpreter.ObjectLike}
  * @param {?Interpreter.Owner=} owner
  * @param {?Interpreter.prototype.Object=} proto
@@ -3892,6 +3945,12 @@ Interpreter.prototype.Object = function(owner, proto) {
   this.proto;
   /** @const {!Object<?Interpreter.Value>} */
   this.properties;
+  // TODO(cpcallen): this is kind of ugly, because connected Objects
+  // have their shape mutated by the on('connect') handler in Server.
+  // Consider rewriting it so that there is a WeakMap on Interpreter
+  // instances mapping objects to their corresponding Socket.
+  /** @type {!net.Socket|undefined} */
+  this.socket;
   throw new Error('Inner class constructor not callable on prototype');
 };
 
@@ -3993,6 +4052,7 @@ Interpreter.prototype.Object.prototype.valueOf = function() {
 
 /**
  * @constructor
+ * @struct
  * @extends {Interpreter.prototype.Object}
  * @param {?Interpreter.Owner=} owner
  * @param {?Interpreter.prototype.Object=} proto
@@ -4045,6 +4105,7 @@ Interpreter.prototype.Function.prototype.construct = function(
 
 /**
  * @constructor
+ * @struct
  * @extends {Interpreter.prototype.Function}
  * @param {!Node} node
  * @param {!Interpreter.Scope} scope Enclosing scope.
@@ -4075,6 +4136,7 @@ function(owner, thisVal, args) {
 
 /**
  * @constructor
+ * @struct
  * @extends {Interpreter.prototype.Function}
  * @param {!Interpreter.prototype.Function} func
  * @param {?Interpreter.Value} thisVal
@@ -4093,6 +4155,7 @@ Interpreter.prototype.BoundFunction = function(func, thisVal, args, owner) {
 
 /**
  * @constructor
+ * @struct
  * @extends {Interpreter.prototype.Function}
  * @param {!NativeFunctionOptions=} options
  */
@@ -4102,23 +4165,20 @@ Interpreter.prototype.NativeFunction = function(options) {
 
 /**
  * @constructor
+ * @struct
  * @extends {Interpreter.prototype.NativeFunction}
  * @param {!Function} impl
  * @param {boolean} legalConstructor
- * @param {?Interpreter.Owner=} owner
- * @param {?Interpreter.prototype.Object=} proto
+ * @param {!NativeFunctionOptions=} options
  */
 Interpreter.prototype.OldNativeFunction =
-    function(impl, legalConstructor, owner, proto) {
-  /** @type {!Function} */
-  this.impl;
-  /** @type {boolean} */
-  this.illegalConstructor;
+    function(impl, legalConstructor, options) {
   throw new Error('Inner class constructor not callable on prototype');
 };
 
 /**
  * @constructor
+ * @struct
  * @extends {Interpreter.prototype.Object}
  * @param {?Interpreter.Owner=} owner
  * @param {?Interpreter.prototype.Object=} proto
@@ -4129,6 +4189,7 @@ Interpreter.prototype.Array = function(owner, proto) {
 
 /**
  * @constructor
+ * @struct
  * @extends {Interpreter.prototype.Object}
  * @param {!Date} date
  * @param {?Interpreter.Owner=} owner
@@ -4142,6 +4203,7 @@ Interpreter.prototype.Date = function(date, owner, proto) {
 
 /**
  * @constructor
+ * @struct
  * @extends {Interpreter.prototype.Object}
  * @param {!RegExp=} re
  * @param {?Interpreter.Owner=} owner
@@ -4155,6 +4217,7 @@ Interpreter.prototype.RegExp = function(re, owner, proto) {
 
 /**
  * @constructor
+ * @struct
  * @extends {Interpreter.prototype.Object}
  * @param {?Interpreter.Owner=} owner
  * @param {?Interpreter.prototype.Object=} proto
@@ -4175,6 +4238,7 @@ Interpreter.prototype.Error.prototype.makeStack = function(callers, perms) {
 
 /**
  * @constructor
+ * @struct
  * @extends {Interpreter.prototype.Object}
  * @param {?Interpreter.Owner=} owner
  * @param {?Interpreter.prototype.Object=} proto
@@ -4185,6 +4249,7 @@ Interpreter.prototype.Arguments = function(owner, proto) {
 
 /**
  * @constructor
+ * @struct
  * @extends {Interpreter.prototype.Object}
  * @param {?Interpreter.Owner=} owner
  * @param {?Interpreter.prototype.Object=} proto
@@ -4197,6 +4262,7 @@ Interpreter.prototype.WeakMap = function(owner, proto) {
 
 /**
  * @constructor
+ * @struct
  * @extends {Interpreter.prototype.Object}
  * @param {!Interpreter.Thread} thread
  * @param {!Interpreter.Owner} owner
@@ -4212,6 +4278,7 @@ Interpreter.prototype.Thread = function(thread, owner, proto) {
 // Other types, not representing JS objects.
 /**
  * @constructor
+ * @struct
  * @implements {Interpreter.ObjectLike}
  * @param {(boolean|number|string)} prim
  */
@@ -4298,13 +4365,14 @@ Interpreter.prototype.Box.prototype.valueOf = function() {
 
 /**
  * @constructor
- * @param {?Interpreter.Owner} owner
+ * @struct
+ * @param {!Interpreter.Owner} owner
  * @param {number} port
  * @param {!Interpreter.prototype.Object} proto
  * @param {number=} timeLimit
  */
 Interpreter.prototype.Server = function(owner, port, proto, timeLimit) {
-  /** @type {?Interpreter.Owner} */
+  /** @type {!Interpreter.Owner} */
   this.owner;
   /** @type {number} */
   this.port;
@@ -4312,18 +4380,18 @@ Interpreter.prototype.Server = function(owner, port, proto, timeLimit) {
   this.proto;
   /** @type {number} */
   this.timeLimit;
-  /** @private @type {net.Server} */
+  /** @private @type {!net.Server} */
   this.server_;
   throw new Error('Inner class constructor not callable on prototype');
 };
 
-/** @param {!Function=} onListening @param {!Function=} onError */
-Interpreter.prototype.Server.prototype.listen = function(onListening, onError) {
+/** @param {!function(!Error=)=} callback */
+Interpreter.prototype.Server.prototype.listen = function(callback) {
   throw new Error('Inner class method not callable on prototype');
 };
 
-/** @param {!Function=} onClose */
-Interpreter.prototype.Server.prototype.unlisten = function(onClose) {
+/** @param {!function()=} callback */
+Interpreter.prototype.Server.prototype.unlisten = function(callback) {
   throw new Error('Inner class method not callable on prototype');
 };
 
@@ -4344,6 +4412,7 @@ Interpreter.prototype.installTypes = function() {
   /**
    * Class for an object.
    * @constructor
+   * @struct
    * @extends {Interpreter.prototype.Object}
    * @param {?Interpreter.Owner=} owner Owner object or null.
    * @param {?Interpreter.prototype.Object=} proto Prototype object or null.
@@ -4584,6 +4653,7 @@ Interpreter.prototype.installTypes = function() {
   /**
    * Class for a function.
    * @constructor
+   * @struct
    * @extends {Interpreter.prototype.Function}
    * @param {?Interpreter.Owner=} owner Owner object (default: null).
    * @param {?Interpreter.prototype.Object=} proto Prototype object or null.
@@ -4598,22 +4668,13 @@ Interpreter.prototype.installTypes = function() {
   intrp.Function.prototype.class = 'Function';
 
   /**
-   * Convert this function into a string.  Since
-   * http://tc39.github.io/Function-prototype-toString-revision/
-   * proposes that (more or less) anything that's not a user-defined
-   * function will return "{ [native code] }", do that here.
+   * Convert this function into a string.
    * @override
+   * @this {!Interpreter.prototype.Function}
    */
   intrp.Function.prototype.toString = function() {
-    // TODO(cpcallen): include formal parameter names.
-    // TODO(cpcallen:perms): readability check?  Would need to add
-    // perms param, in which case method should probably be renamed
-    // and we need to audit all use of String() throughout the
-    // interpreter (including implicit use inside v8-native
-    // functions).
-    var pd = this.getOwnPropertyDescriptor('name', intrp.ANYBODY);
-    var name = pd && typeof pd.value === 'string' ? pd.value : '';
-    return 'function ' + name + '() { [native code] }';
+    // Just do the simplest possible (spec-compliant) thing here.
+    return 'function () { [native code] }';
   };
 
   /**
@@ -4706,6 +4767,7 @@ Interpreter.prototype.installTypes = function() {
   /**
    * Class for a user-defined function.
    * @constructor
+   * @struct
    * @extends {Interpreter.prototype.UserFunction}
    * @param {!Node} node AST node for function body.
    * @param {!Interpreter.Scope} scope Enclosing scope.
@@ -4857,6 +4919,7 @@ Interpreter.prototype.installTypes = function() {
   /**
    * Class for bound functions.  See ES5 §15.3.4.5 / ES6 §9.4.1.
    * @constructor
+   * @struct
    * @extends {Interpreter.prototype.BoundFunction}
    * @param {!Interpreter.prototype.Function} func Function to be bound.
    * @param {?Interpreter.Value} thisVal The this value passed into function.
@@ -4960,6 +5023,7 @@ Interpreter.prototype.installTypes = function() {
    * intrp.FUNCTION - i.e., Function.prototype).
    *
    * @constructor
+   * @struct
    * @extends {Interpreter.prototype.NativeFunction}
    * @param {!NativeFunctionOptions=} options Options object for
    *     constructing native function.
@@ -4969,12 +5033,16 @@ Interpreter.prototype.installTypes = function() {
     var owner = (options.owner !== undefined ? options.owner : intrp.ROOT);
     // Invoke super constructor.
     intrp.Function.call(/** @type {?} */ (this), owner, options.proto);
-    // Set .name if name or id supplied.
+    // Set .name if name or id supplied, and save original name internally.
+    // N.B.: Function.prototype gets .name === ''.
+    /** The initial value of the .name property.  @type {string|undefined} */
+    this.name = undefined;
     if (options.name !== undefined) {
-      this.setName(options.name);
+      this.name = options.name;
     } else if (options.id) {
-      this.setName(options.id.replace(/^.*\./, ''));
+      this.name = options.id.replace(/^.*\./, '');
     }
+    if (this.name !== undefined) this.setName(this.name);
     // Set .length if length supplied.
     if (options.length !== undefined) {
       this.defineProperty('length', Descriptor.none.withValue(options.length),
@@ -5005,22 +5073,38 @@ Interpreter.prototype.installTypes = function() {
   intrp.NativeFunction.prototype.constructor = intrp.NativeFunction;
 
   /**
+   * Convert this function into a string.  This implements
+   * https://tc39.es/Function-prototype-toString-revision/#proposal-sec-function.prototype.tostring
+   * (now adopted) as it applies to "Well-known Intrinsic Object[s]"
+   * as well as any other NativeFunction constructed with specified
+   * name or id.
+   * @override
+   */
+  intrp.NativeFunction.prototype.toString = function() {
+    if (this.name === undefined) {
+      return intrp.Function.prototype.toString.call(this);
+    }
+    // TODO(cpcallen): include formal parameter names?
+    return 'function ' + this.name + '() { [native code] }';
+  };
+
+  /**
    * Class for an old native function.
    * @constructor
+   * @struct
    * @extends {Interpreter.prototype.OldNativeFunction}
    * @param {!Function} impl Old-style native function implementation
    * @param {boolean} legalConstructor True if the function can be used as a
    *     constructor (e.g. Array), false if not (e.g. escape).
-   * @param {?Interpreter.Owner=} owner Owner object or null (default: root).
-   * @param {?Interpreter.prototype.Object=} proto Prototype object or null.
+   * @param {!NativeFunctionOptions=} options Options object for
+   *     constructing the underlying NativeFunction.
    */
-  intrp.OldNativeFunction = function(impl, legalConstructor, owner, proto) {
-    if (!impl) {  // Deserializing
-      return;
-    }
-    intrp.NativeFunction.call(/** @type {?} */ (this),
-        {owner: owner, proto: proto, length: impl.length});
+  intrp.OldNativeFunction = function(impl, legalConstructor, options) {
+    if (!impl) return;  // Deserializing
+    intrp.NativeFunction.call(/** @type {?} */ (this), options);
+    /** @type {!Function} */
     this.impl = impl;
+    /** @type {boolean} */
     this.illegalConstructor = !legalConstructor;
   };
 
@@ -5056,6 +5140,7 @@ Interpreter.prototype.installTypes = function() {
   /**
    * Class for an array
    * @constructor
+   * @struct
    * @extends {Interpreter.prototype.Array}
    * @param {?Interpreter.Owner=} owner Owner object or null.
    * @param {?Interpreter.prototype.Object=} proto Prototype object or null.
@@ -5107,6 +5192,7 @@ Interpreter.prototype.installTypes = function() {
   /**
    * Class for a date.
    * @constructor
+   * @struct
    * @extends {Interpreter.prototype.Date}
    * @param {!Date} date Date value for this Date object.
    * @param {?Interpreter.Owner=} owner Owner object or null.
@@ -5144,6 +5230,7 @@ Interpreter.prototype.installTypes = function() {
   /**
    * Class for a regexp
    * @constructor
+   * @struct
    * @extends {Interpreter.prototype.RegExp}
    * @param {!RegExp=} re The RegExp value for this RegExp object.
    * @param {?Interpreter.Owner=} owner Owner object or null.
@@ -5186,6 +5273,7 @@ Interpreter.prototype.installTypes = function() {
   /**
    * Class for an error object
    * @constructor
+   * @struct
    * @extends {Interpreter.prototype.Error}
    * @param {?Interpreter.Owner=} owner Owner object or null.
    * @param {?Interpreter.prototype.Object=} proto Prototype object or null.
@@ -5292,6 +5380,7 @@ Interpreter.prototype.installTypes = function() {
    * What's left is basically an ordinary object with a special
    * [[Class]].
    * @constructor
+   * @struct
    * @extends {Interpreter.prototype.Arguments}
    * @param {?Interpreter.Owner=} owner Owner object or null.
    * @param {?Interpreter.prototype.Object=} proto Prototype object or null.
@@ -5307,6 +5396,7 @@ Interpreter.prototype.installTypes = function() {
   /**
    * The WeakMap class from ES6.
    * @constructor
+   * @struct
    * @extends {Interpreter.prototype.WeakMap}
    * @param {?Interpreter.Owner=} owner Owner object or null.
    * @param {?Interpreter.prototype.Object=} proto Prototype object or null.
@@ -5328,6 +5418,7 @@ Interpreter.prototype.installTypes = function() {
    * Note that there should be at most one of these wrappers for each
    * Interpreter.Thread, and this constructor enforces this.
    * @constructor
+   * @struct
    * @extends {Interpreter.prototype.Thread}
    * @param {!Interpreter.Thread} thread Thread represented by this object.
    * @param {!Interpreter.Owner} owner Owner of this thread.
@@ -5360,6 +5451,7 @@ Interpreter.prototype.installTypes = function() {
    * ES5.1 or ES6 to do ToObject().
    *
    * @constructor
+   * @struct
    * @extends {Interpreter.prototype.Box}
    * @param {(boolean|number|string)} prim Primitive to box
    */
@@ -5516,8 +5608,9 @@ Interpreter.prototype.installTypes = function() {
    * userland pseduoObject, but it is intended to be easily adaptable
    * for that if desired.
    * @constructor
+   * @struct
    * @extends {Interpreter.prototype.Server}
-   * @param {?Interpreter.Owner} owner Owner object or null.
+   * @param {!Interpreter.Owner} owner Owner object or null.
    * @param {number} port Port to listen on.
    * @param {!Interpreter.prototype.Object} proto Prototype object for
    *     new connections.
@@ -5529,7 +5622,7 @@ Interpreter.prototype.installTypes = function() {
     if ((port !== (port >>> 0) || port > 0xffff) && port !== undefined) {
       throw new RangeError('invalid port ' + port);
     }
-    /** @type {?Interpreter.Owner} */
+    /** @type {!Interpreter.Owner} */
     this.owner = owner;
     /** @type {number} */
     this.port = port;
@@ -5537,27 +5630,15 @@ Interpreter.prototype.installTypes = function() {
     this.proto = proto;
     /** @type {number} */
     this.timeLimit = timeLimit || 0;
-    /** @type {?net.Server} */
-    this.server_ = null;
-  };
+    /** @type {!net.Server} */
+    this.server_ = new net.Server({allowHalfOpen: true});
 
-  /**
-   * Start a Server object listening on its assigned port.
-   * @param {!Function=} onListening Callback to call once listening has begun.
-   * @param {!Function=} onError Callback to call in case of error.
-   */
-  intrp.Server.prototype.listen = function(onListening, onError) {
-    // Invariant checks.
-    if (this.port === undefined || !(this.proto instanceof intrp.Object)) {
-      throw new Error('Invalid Server state');
-    }
-    if (intrp.listeners_[this.port] !== this) {
-      throw new Error('Listening on server not listed in .listeners_??');
-    }
-    var server = this;  // Because this will be undefined in handlers below.
-    // Create net.Server, start it listening, and attached it to this.
-    var netServer = new net.Server(/* {allowHalfOpen: true} */);
-    netServer.on('connection', function(socket) {
+    // Create the net.Server instance and set up event handlers but
+    // don't yet start it listening.
+    var server = this;  // So we can refer to it in handlers below.
+    this.server_.on('connection', function(socket) {
+      intrp.log('net', 'Connection on :%s from %s:%s',
+                server.port, socket.remoteAddress, socket.remotePort);
       // TODO(cpcallen): Add localhost test here, like this - only
       // also allow IPV6 connections:
       // if (socket.remoteAddress != '127.0.0.1') {
@@ -5567,26 +5648,36 @@ Interpreter.prototype.installTypes = function() {
       //   socket.end('Connection rejected.');
       //   return;
       // }
-      intrp.log('net', 'Connection from %s', socket.remoteAddress);
 
       // Create new object from proto and call onConnect.
       var obj = new intrp.Object(server.owner, server.proto);
       obj.socket = socket;
-      var func = obj.get('onConnect', this.owner);
+      var func = obj.get('onConnect', server.owner);
       if (func instanceof intrp.Function && server.owner !== null) {
         // TODO(cpcallen:perms): Is server.owner the correct owner for
-        // this thread?  Note that this will typically be root, and
+        // the thread?  Note that this will typically be root, and
         // .onConnect will therefore get caller perms === root, which
         // is probably dangerous.  Here and several places below.
         intrp.createThreadForFuncCall(
             server.owner, func, obj, [], undefined, server.timeLimit);
       }
 
+      // Handle socket closing completely.
+      socket.on('close', function() {
+        intrp.log('net', 'Connection on :%s from %s:%s closed',
+                  server.port, socket.remoteAddress, socket.remotePort);
+        var func = obj.get('onClose', server.owner);
+        if (func instanceof intrp.Function && server.owner !== null) {
+          intrp.createThreadForFuncCall(
+              server.owner, func, obj, [], undefined, server.timeLimit);
+        }
+      });
+
       // Handle incoming data from clients.  N.B. that data is a
       // node buffer object, so we must convert it to a string
       // before passing it to user code.
       socket.on('data', function(data) {
-        var func = obj.get('onReceive', this.owner);
+        var func = obj.get('onReceive', server.owner);
         if (func instanceof intrp.Function && server.owner !== null) {
           intrp.createThreadForFuncCall(
               server.owner, func, obj, [String(data)],
@@ -5594,20 +5685,23 @@ Interpreter.prototype.installTypes = function() {
         }
       });
 
+      // Handle far end closing connection.
       socket.on('end', function() {
-        intrp.log('net', 'Connection from %s closed.', socket.remoteAddress);
-        var func = obj.get('onEnd', this.owner);
+        intrp.log('net', 'Connection on :%s from %s:%s ended',
+                  server.port, socket.remoteAddress, socket.remotePort);
+        var func = obj.get('onEnd', server.owner);
         if (func instanceof intrp.Function && server.owner !== null) {
           intrp.createThreadForFuncCall(
               server.owner, func, obj, [], undefined, server.timeLimit);
         }
-        // TODO(cpcallen): Don't fully close half-closed connection yet.
-        socket.end();
       });
 
+      // Handle errors.
       socket.on('error', function(error) {
-        intrp.log('net', 'Socket error:', error);
-        var func = obj.get('onError', this.owner);
+        intrp.log('net', 'Socket error on :%s from %s:%s: %s: %s',
+                  server.port, socket.remoteAddress, socket.remotePort,
+                  error.name, error.message);
+        var func = obj.get('onError', server.owner);
         if (func instanceof intrp.Function && server.owner !== null) {
           var userError = intrp.errorNativeToPseudo(error, server.owner);
           intrp.createThreadForFuncCall(
@@ -5620,38 +5714,67 @@ Interpreter.prototype.installTypes = function() {
       // later (when we want to obtain list of connected objects).
     });
 
-    netServer.on('listening', function() {
-      var addr = netServer.address();
-      intrp.log('net', 'Listening on %s address %s port %s', addr.family,
-                  addr.address, addr.port);
-      onListening && onListening();
+    this.server_.on('listening', function() {
+      var addr = this.address();
+      intrp.log('net', 'Listening on %s %s:%s',
+                addr.family, addr.address, addr.port);
     });
 
-    netServer.on('error', function(error) {
-      // TODO(cpcallen): attach additional information about
-      // reason for failure.
-      intrp.log('net', 'Listen on port %s failed: %s: %s', server.port,
-                  error.name, error.message);
-      onError && onError(error);
+    this.server_.on('error', function(error) {
+      intrp.log('net', 'Error on :%s: %s: %s',
+                server.port, error.name, error.message);
     });
 
-    netServer.on('close', function() {
-      intrp.log('net', 'Done listening on port %s', server.port);
-      server.server_ = null;
+    this.server_.on('close', function() {
+      intrp.log('net', 'Stopped listening on :%s', server.port);
     });
+  };
 
-    netServer.listen(this.port);
-    this.server_ = netServer;
+  /**
+   * Start a Server object listening on its assigned port.
+   * @param {!function(!Error=)=} callback
+   *     Callback that will be called once listening has begun, or with
+   *     an Error argument if listening fails.
+   */
+  intrp.Server.prototype.listen = function(callback) {
+    // Invariant checks.
+    if (this.port === undefined ||
+        !(this.proto instanceof intrp.Object) ||
+        !(this.server_ instanceof net.Server)) {
+      throw new Error('invalid Server state');
+    }
+    if (intrp.listeners_[this.port] !== this) {
+      throw new Error('Listening on server not listed in .listeners_??');
+    }
+
+    // Set up callbacks.  Fiddly, because we want to temporarily hook
+    // the error handler but be sure to unhook it whether the listen
+    // call succeeds or fails.
+    var /** boolean */ done = false;
+    /** @type {function(this:net.Server, !Error=)} */
+    function hook(error) {
+      if (done) throw new Error('unexpected multiple callbacks');
+      done = true;
+      this.removeListener(events.errorMonitor, hook);
+      if (callback) callback(error);
+    };
+    this.server_.on(events.errorMonitor, hook);
+    this.server_.listen(this.port, hook);
   };
 
   /**
    * Stop a Server object listening on its assigned port.
-   * @param {!Function=} onClose Callback to call once listening has ceased.
+   * @param {!function()=} callback Callback that will be called after
+   *     listening has ceased.
    */
-  intrp.Server.prototype.unlisten = function(onClose) {
-    this.server_.close(onClose);
-    // Existing .on('close', ...) event handler will take care of
-    // setting this.server_ = null.
+  intrp.Server.prototype.unlisten = function(callback) {
+    // Invariant checks.
+    if (this.port === undefined ||
+        !(this.proto instanceof intrp.Object) ||
+        !(this.server_ instanceof net.Server)) {
+      throw new Error('invalid Server state');
+    }
+    this.server_.close(callback);
   };
 };
 
@@ -5666,7 +5789,7 @@ Interpreter.prototype.installTypes = function() {
  *            id: (string|undefined),
  *            call: (Interpreter.NativeCallImpl|undefined),
  *            construct: (Interpreter.NativeConstructImpl|undefined),
- *            owner: (?Interpreter.Owner|undefined),
+ *            owner: (!Interpreter.Owner|undefined),
  *            proto: (?Interpreter.prototype.Object|undefined)}}
  */
 var NativeFunctionOptions;
@@ -5696,6 +5819,7 @@ Interpreter.Descriptor.prototype.configurable;
  * commonly-used examples and a function to easily create new
  * descriptors from a prototype.
  * @constructor
+ * @struct
  * @implements {Interpreter.Descriptor}
  * @param {boolean=} writable Is the property writable?
  * @param {boolean=} enumerable Is the property enumerable?
@@ -6779,8 +6903,8 @@ stepFuncs_['Program'] = function(thread, stack, state, node) {
  * @return {!Interpreter.State|undefined}
  */
 stepFuncs_['ReturnStatement'] = function(thread, stack, state, node) {
-  if (node['argument'] && !state.done_) {
-    state.done_ = true;
+  if (node['argument'] && state.step_ === 0) {
+    state.step_ = 1;
     return new Interpreter.State(node['argument'], state.scope);
   }
   this.unwind_(

@@ -24,10 +24,11 @@
 //////////////////////////////////////////////////////////////////////
 
 $.Selector = function Selector(s) {
-  // A Selector is a representation of a selector string in the form
-  // of an array (of Selector.Parts) which happens to have
-  // Selector.prototype (with various useful convenience methods) in
-  // its prototype chain.
+  /* A Selector is a representation of a selector string in the form
+   * of an array (of Selector.Parts) which happens to have
+   * Selector.prototype (with various useful convenience methods) in
+   * its prototype chain.
+   */
   var parts;
   if (typeof s === 'string') {
     // Parse selector text (but check in cache first).
@@ -39,23 +40,23 @@ $.Selector = function Selector(s) {
     parts = [];
     // Validate & copy parts list.
     if (s.length < 1) throw new RangeError('Zero-length parts list??');
-    if (typeof s[0] !== 'string' || !$.utils.code.regexps.identifierExact.test(s[0])) {
-      throw new TypeError('Parts array must begin with an identifier');
+    if (!$.utils.code.isIdentifier(s[0])) {
+      throw new TypeError('parts array must begin with an identifier');
     }
     parts[0] = s[0];
     for (var i = 1; i < s.length; i++) {
       if (typeof s[i] === 'string' || s[i] === Selector.PROTOTYPE || s[i] === Selector.OWNER) {
-	      parts[i] = s[i];
+        parts[i] = s[i];
       } else if (s[i] instanceof Selector.SpecialPart) {
         throw new TypeError('Invalid SpecialPart in parts array');
-	    } else if (typeof s[i] === 'object' && s[i].type) {
+      } else if (typeof s[i] === 'object' && s[i].type) {
         // Handle normalisation of parts lists that have been roundtripped via JSON.
         switch(s[i].type) {
           case 'proto':
-	          parts[i] = Selector.PROTOTYPE;
+            parts[i] = Selector.PROTOTYPE;
             break;
           case 'owner':
-	          parts[i] = Selector.OWNER;
+            parts[i] = Selector.OWNER;
             break;
           default:
           throw new TypeError('Unknown SpecialPart type ' + s[i].type);
@@ -73,29 +74,35 @@ $.Selector = function Selector(s) {
   Selector.cache_[parts.toString()] = parts;  // Save.
   return parts;
 };
-Object.setOwnerOf($.Selector, Object.getOwnerOf($.system.onStartup.prototype));
+Object.setOwnerOf($.Selector, $.physicals.Maximilian);
 Object.setPrototypeOf($.Selector.prototype, Array.prototype);
 $.Selector.prototype.isOwner = function isOwner() {
-  // Returns true iff the selector represents an object owner binding.
+  /* Returns true iff the selector represents an object owner binding.
+   */
   return this.length > 1 && this[this.length - 1] === this.constructor.OWNER;
 };
-Object.setOwnerOf($.Selector.prototype.isOwner, Object.getOwnerOf($.Selector));
+Object.setOwnerOf($.Selector.prototype.isOwner, $.physicals.Maximilian);
 $.Selector.prototype.isProp = function isProp() {
-  // Returns true iff the selector represents an object property binding.
+  /* Returns true iff the selector represents an object property binding.
+   */
   return this.length > 1 && typeof this[this.length - 1] === 'string';
 };
+Object.setOwnerOf($.Selector.prototype.isProp, $.physicals.Maximilian);
 $.Selector.prototype.isProto = function isProto() {
-  // Returns true iff the selector represents an object prototype binding.
+  /* Returns true iff the selector represents an object prototype binding.
+   */
   return this.length > 1 && this[this.length - 1] === this.constructor.PROTOTYPE;
 };
-Object.setOwnerOf($.Selector.prototype.isProto, Object.getOwnerOf($.Selector.prototype.isOwner));
+Object.setOwnerOf($.Selector.prototype.isProto, $.physicals.Maximilian);
 $.Selector.prototype.isVar = function isVar() {
-  // Returns true iff the selector represents a top-level variable binding.
+  /* Returns true iff the selector represents a top-level variable binding.
+   */
   return this.length === 1 && typeof this[0] === 'string';
 };
+Object.setOwnerOf($.Selector.prototype.isVar, $.physicals.Maximilian);
 $.Selector.prototype.toExpr = function toExpr() {
-	// Return the selector as an evaluable expression yeilding the
-  // selected value.
+  /* Return the selector as an evaluable expression yeilding the selected value.
+   */
   return this.toString(function(part, out) {
     if (part === $.Selector.PROTOTYPE) {
       out.unshift('Object.getPrototypeOf(');
@@ -108,16 +115,16 @@ $.Selector.prototype.toExpr = function toExpr() {
     }
   });
 };
-Object.setOwnerOf($.Selector.prototype.toExpr, Object.getOwnerOf($.Selector.prototype.isOwner));
+Object.setOwnerOf($.Selector.prototype.toExpr, $.physicals.Maximilian);
 $.Selector.prototype.toSetExpr = function toSetExpr(valueExpr) {
-	// Return an expression setting the selected value to the value of
-  // the supplied expression.
-  //
-  // The parameter valueExpr should be a string containing a JS
-  // expression that evaluates to the new value to be assigned to the
-  // selected location.  It must not contain any non-parenthesized
-  // operators with lower precedence than '=' - specifically, the
-  // yield and comma operators.
+  /* Return an expression setting the selected value to the value of the
+   * supplied expression.
+   *
+   * The parameter valueExpr should be a string containing a JS expression that
+   * evaluates to the new value to be assigned to the selected location.  It
+   * must not contain any non-parenthesized operators with lower precedence
+   * than '=' - specifically, the yield and comma operators.
+   */
   var lastPart = this[this.length - 1];
   if (!(lastPart instanceof this.constructor.SpecialPart)) {
     return this.toExpr() + ' = ' + valueExpr;
@@ -131,15 +138,15 @@ $.Selector.prototype.toSetExpr = function toSetExpr(valueExpr) {
     throw new TypeError('Invalid part in parts array');
   }
 };
-Object.setOwnerOf($.Selector.prototype.toSetExpr, Object.getOwnerOf($.Selector.prototype.isOwner));
+Object.setOwnerOf($.Selector.prototype.toSetExpr, $.physicals.Maximilian);
 $.Selector.prototype.toString = function toString(specialHandler) {
-  // Return the canonical selector string for this Selector.
-  //
-  // The specialHandler optional parameter, if supplied, should be a
-  // callback which accepts a Selector.SpecialPart instance and an
-  // Array of strings, and pushes a string representation of the
-  // SpecialPart onto the array.  (See Selector.prototype.toExpr for
-  // an example of how to use this.)
+  /* Return the canonical selector string for this Selector.
+   *
+   * The specialHandler optional parameter, if supplied, should be callback
+   * which accepts a Selector.SpecialPart instance and an Array of strings, and
+   * pushes a string representation of the SpecialPart onto the array.  (See
+   * Selector.prototype.toExpr for an example of how to use this.)
+   */
   var out = [this[0]];
   for (var i = 1; i < this.length; i++) {
     var part = this[i];
@@ -149,7 +156,7 @@ $.Selector.prototype.toString = function toString(specialHandler) {
       } else {
         out.push(String(part));
       }
-    } else if ($.utils.code.regexps.identifierExact.test(part)) {
+    } else if ($.utils.code.isIdentifierName(part)) {
       out.push('.', part);
     } else if (String(Number(part)) === part) {
       // String represents a number with same string representation.
@@ -160,24 +167,25 @@ $.Selector.prototype.toString = function toString(specialHandler) {
   }
   return out.join('');
 };
-Object.setOwnerOf($.Selector.prototype.toString, Object.getOwnerOf($.Selector.prototype.isOwner));
+Object.setOwnerOf($.Selector.prototype.toString, $.physicals.Maximilian);
 $.Selector.prototype.toValue = function toValue(save, global) {
-  // Return value corresponding to this Selector, or throw EvalError
-  // if that is not possible.  This function basically does
-  //
-  //     return eval(this.toExpr())
-  //
-  // ...only slightly more safely.
-  //
-  // Added bonus features:
-  // - If this selector evaluates to an object and save is true, the
-  //   selector will be added to the the reverse-lookup database.
-  // - If global is specified, global variables will be evaluated
-  //   by looking them up as properties on that object.
+  /* Return value corresponding to this Selector, or throw EvalError if that is
+   * not possible.  This function basically does
+   *
+   *     return eval(this.toExpr())
+   *
+   * ...only slightly more safely.
+   *
+   * Added bonus features:
+   * - If this selector evaluates to an object and save is true, the  selector
+   *   will be added to the the reverse-lookup database.
+   * - If global is specified, global variables will be evaluated by looking
+   *   them up as properties on that object.
+   */
   if (this.length === 0) throw RangeError('Invalid Selector');
   var varname = this[0];
   if (!$.utils.code.isIdentifier(varname)) {
-    throw TypeError('Invalid first part');
+    throw TypeError('invalid variable identifier');
   }
   var v;
   if (global) {
@@ -211,19 +219,20 @@ $.Selector.prototype.toValue = function toValue(save, global) {
   }
   return v;
 };
-Object.setOwnerOf($.Selector.prototype.toValue, Object.getOwnerOf($.Selector.prototype.isOwner));
+Object.setOwnerOf($.Selector.prototype.toValue, $.physicals.Maximilian);
 $.Selector.prototype.badness = function badness() {
-  // Returns a "badness" score, inversely proportional to how
-  // desirable a particular selector is amongst other selectors
-  // referring to the same object.  In general, longer selectors are
-  // more bad, but selectors containing special parts are especially
-  // bad.
+  /* Returns a "badness" score, inversely proportional to how
+   * desirable a particular selector is amongst other selectors
+   * referring to the same object.  In general, longer selectors are
+   * more bad, but selectors containing special parts are especially
+   * bad.
+   */
   var penalties = 0;
-	for (var i = 0; i < this.length; i++) {
+  for (var i = 0; i < this.length; i++) {
     var part = this[i];
     if (part instanceof this.constructor.SpecialPart) {
       penalties += 100;
-    } else if ($.utils.code.regexps.identifierExact.test(part)) {
+    } else if ($.utils.code.isIdentifierName(part)) {
       penalties += 10;  // We like identifiers.
     } else if (String(Number(part)) === part) {
       penalties += 25;  // Numbers are OK.
@@ -234,22 +243,17 @@ $.Selector.prototype.badness = function badness() {
   if (this[0] === '$') penalties += 50;  // Prefer builtins.
   return penalties + String(this).length;
 };
-Object.setOwnerOf($.Selector.prototype.badness, Object.getOwnerOf($.Selector.prototype.isOwner));
+Object.setOwnerOf($.Selector.prototype.badness, $.physicals.Maximilian);
 $.Selector.SpecialPart = function SpecialPart(type) {
   // A SpecialPart is a class for all "special" selector parts (ones
   // which do not represent named variables / properties).
   this.type = type;
   Object.freeze(this);
 };
-$.Selector.SpecialPart.prototype.constructor = function SpecialPart(type) {
-  // A SpecialPart is a class for all "special" selector parts (ones
-  // which do not represent named variables / properties).
-  this.type = type;
-};
-$.Selector.SpecialPart.prototype.constructor.prototype = $.Selector.SpecialPart.prototype;
-$.Selector.SpecialPart.prototype.toString = function() {
+$.Selector.SpecialPart.prototype.toString = function toString() {
   return '{' + this.type + '}';
 };
+Object.setOwnerOf($.Selector.SpecialPart.prototype.toString, $.physicals.Maximilian);
 $.Selector.PROTOTYPE = (new 'Object.create')($.Selector.SpecialPart.prototype);
 $.Selector.PROTOTYPE.type = 'proto';
 Object.defineProperty($.Selector.PROTOTYPE, 'type', {writable: false, configurable: false});
@@ -347,14 +351,14 @@ $.Selector.parse = function parse(selector) {
   }
   return parts;
 };
-Object.setOwnerOf($.Selector.parse, Object.getOwnerOf($.Selector.prototype.badness));
+Object.setOwnerOf($.Selector.parse, $.physicals.Maximilian);
 $.Selector.parse.tokenize = function tokenize(selector) {
   // Tokenizes a selector string.  Throws a SyntaxError if any text is
- 	// found which does not form a valid token.
+  // found which does not form a valid token.
   var REs = {
     whitespace: /^\s+/g,
     '.': /^\./g,
-    id: new RegExp('^' + $.utils.code.regexps.identifier.source, 'g'),
+    id: new RegExp('^' + $.utils.code.regexps.identifierName.source, 'g'),
     number: /^\d+/g,
     '[': /^\[/g,
     ']': /^\]/g,
@@ -363,7 +367,7 @@ $.Selector.parse.tokenize = function tokenize(selector) {
     '^': /^\^/g,
     str: new RegExp('^' + $.utils.code.regexps.string.source, 'g'),
   };
-  
+
   var tokens = [];
   NEXT_TOKEN: for (var index = 0; index < selector.length; ) {
     for (var tokenType in REs) {
@@ -396,63 +400,13 @@ $.Selector.parse.tokenize = function tokenize(selector) {
   }
   return tokens;
 };
-$.Selector.parse.tokenize.prototype.constructor = function tokenize(selector) {
-	// Tokenizes a selector string.  Throws a SyntaxError if any text is
- 	// found which does not form a valid token.
-  var REs = {
-    whitespace: /^\s+/,
-    '.': /^\./,
-    id: new RegExp('^' + $.utils.code.regexp.identifier.source),
-    number: /^\d+/,
-    '[': /^\[/,
-    ']': /^\]/,
-    '{': /^\{/,
-    '}': /^\}/,
-    '^': /^\^/,
-    str: new RegExp('^' + $.utils.code.regexps.string.source),
-  };
-  
-  var tokens = [];
-  NEXT_TOKEN: for (var index = 0; index < selector.length; ) {
-    for (var tokenType in REs) {
-      if (!REs.hasOwnProperty(tokenType)) continue;
-      var re = REs[tokenType];
-      var m = re.exec(selector.slice(index));
-      if (!m) continue;  // No match.  Try next regexp.
-      tokens.push({
-        type: tokenType,
-        raw: m[0],
-        valid: true,
-        index: index,
-      });
-      index += re.lastIndex;
-      continue NEXT_TOKEN;
-    }
-    // No token matched.
-    throw new SyntaxError('invalid selector ' + selector);
-  }
-
-  // Postprocess token list to get values.
-  for(var i = 0; i < tokens.length; i++) {
-    var token = tokens[i];
-    if (token.type === 'number') {
-      token.value = Number(token.raw);
-    } else if (token.type === 'str') {
-      token.value = $.utils.code.parseString(token.raw);
-    }
-  }
-  return tokens;
-};
-$.Selector.parse.tokenize.prototype.constructor.prototype = $.Selector.parse.tokenize.prototype;
+Object.setOwnerOf($.Selector.parse.tokenize, $.physicals.Maximilian);
 $.Selector.for = function Selector_for(object) {
-  // Return a Selector for object, or undefined if none known.
+  /* Return a Selector for object, or undefined if none known.
+   */
   return this.db.get(object);
 };
-$.Selector.for.prototype.constructor = function Selector_for(object) {
-  // Return a Selector for object, or undefined if none known.
-  return undefined;
-};
-$.Selector.for.prototype.constructor.prototype = $.Selector.for.prototype;
+Object.setOwnerOf($.Selector.for, $.physicals.Maximilian);
 $.Selector.db = {};
 $.Selector.db.map_ = new WeakMap();
 $.Selector.db.set = function set(object, selector) {
@@ -469,14 +423,14 @@ $.Selector.db.set = function set(object, selector) {
   known.push(selectorString);
   // Sort by badness, trim to length and save.
   $.Selector.sortByBadness(known);
-	this.map_.set(object, known.slice(0, this.diversityLimit));
+  this.map_.set(object, known.slice(0, this.diversityLimit));
 };
-Object.setOwnerOf($.Selector.db.set, Object.getOwnerOf($.Selector.parse));
+Object.setOwnerOf($.Selector.db.set, $.physicals.Maximilian);
 $.Selector.db.README = 'Selector.db is database mapping objects to Selectors.\n\nThis info is stored in Selector.db.map_, which is a WeakMap mapping objects to entries.\n\nEach entry is an object whose keys are selector strings and values are the corresponding Selectors (i.e., parts lists).';
 $.Selector.db.diversityLimit = 5;
 $.Selector.db.get = function get(object) {
   if (!$.utils.isObject(object)) return undefined;
-	var known = this.map_.get(object);
+  var known = this.map_.get(object);
   while (known && known.length) {
     var selector = new $.Selector(known[0]);
     var value = null;
@@ -491,7 +445,7 @@ $.Selector.db.get = function get(object) {
   }
   return undefined;  // Ran out of known, valid selectors.
 };
-Object.setOwnerOf($.Selector.db.get, Object.getOwnerOf($.Selector.db.set));
+Object.setOwnerOf($.Selector.db.get, $.physicals.Maximilian);
 $.Selector.db.populate = function populate() {
   /* Spider the object graph, starting from the global scope, to
    * (re)build the reverse-lookup database.
@@ -531,8 +485,8 @@ $.Selector.db.populate = function populate() {
   }
 
 };
-Object.setOwnerOf($.Selector.db.populate, Object.getOwnerOf($.Selector.db.get));
-Object.setOwnerOf($.Selector.db.populate.prototype, Object.getOwnerOf($.Selector.db.get));
+Object.setOwnerOf($.Selector.db.populate, $.physicals.Maximilian);
+Object.setOwnerOf($.Selector.db.populate.prototype, $.physicals.Maximilian);
 $.Selector.db.populate.thread_ = null;
 $.Selector.sortByBadness = function sortByBadness(selectors) {
   // Sort an array (or arraylike), which may contain Selectors,
@@ -564,7 +518,7 @@ $.Selector.sortByBadness = function sortByBadness(selectors) {
   });
   return selectors;
 };
-Object.setOwnerOf($.Selector.sortByBadness, Object.getOwnerOf($.Selector.db.get));
+Object.setOwnerOf($.Selector.sortByBadness, $.physicals.Maximilian);
 
 $.utils.Binding = function Binding(object, part) {
   /* A binding is essentially just an (object, part) tuple, where part
@@ -575,7 +529,7 @@ $.utils.Binding = function Binding(object, part) {
    * a variable in the global scope.
    */
   if (object === null) {
-    if (typeof part !== 'string' || !$.utils.code.regexps.identifierExact.test(part)) {
+    if (!$.utils.code.isIdentifier(part)) {
       throw TypeError('Invalid variable name');
     }
   } else if (!$.utils.isObject(object)) {
@@ -588,9 +542,10 @@ $.utils.Binding = function Binding(object, part) {
   this.object = object;
   this.part = part;
 };
-Object.setOwnerOf($.utils.Binding, Object.getOwnerOf($.Selector.db.get));
+Object.setOwnerOf($.utils.Binding, $.physicals.Maximilian);
 $.utils.Binding.prototype.set = function set(value) {
-  // Set the value of the binding.  Throws TypeError if unable.
+  /* Set the value of the binding.  Throws TypeError if unable.
+   */
   if (this.object === null) {
     if (!Object.prototype.hasOwnProperty.call($.utils.code.getGlobal(), this.part)) {
       throw new TypeError("Can't create new global variable");
@@ -619,10 +574,10 @@ $.utils.Binding.prototype.set = function set(value) {
     Object.setOwnerOf(this.object, value);
   } else {
     // BUG: doesn't handle non-writable properties.
-		this.object[this.part] = value;
+    this.object[this.part] = value;
   }
 };
-Object.setOwnerOf($.utils.Binding.prototype.set, Object.getOwnerOf($.Selector.db.get));
+Object.setOwnerOf($.utils.Binding.prototype.set, $.physicals.Maximilian);
 $.utils.Binding.prototype.get = function get(inherited) {
   /* Return the current value of the binding, or undefined if the
    * binding does not exist.
@@ -634,7 +589,7 @@ $.utils.Binding.prototype.get = function get(inherited) {
   var part = this.part;
   if (this.object === null) {
     if (!$.utils.code.isIdentifier(part)) {
-        throw new TypeError('Invalid part');
+      throw new TypeError('invalid variable identifier');
     }
     var evalGlobal = eval;
     return evalGlobal(part);
@@ -649,36 +604,38 @@ $.utils.Binding.prototype.get = function get(inherited) {
     return undefined;
   }
 };
-Object.setOwnerOf($.utils.Binding.prototype.get, Object.getOwnerOf($.Selector.db.get));
+Object.setOwnerOf($.utils.Binding.prototype.get, $.physicals.Maximilian);
 $.utils.Binding.prototype.isOwner = function isOwner() {
-  // Returns true iff the binding is an bject owner binding.
+  /* Returns true iff the binding is an bject owner binding.
+   */
   return this.part === $.Selector.OWNER;
 };
-Object.setOwnerOf($.utils.Binding.prototype.isOwner, Object.getOwnerOf($.Selector.db.get));
+Object.setOwnerOf($.utils.Binding.prototype.isOwner, $.physicals.Maximilian);
 $.utils.Binding.prototype.isProp = function isProp() {
+  /* Returns true iff the binding is an object property binding.
+   */
   return this.object !== null && typeof this.part === 'string';
 };
-$.utils.Binding.prototype.isProp.prototype.constructor = function isProp() {
-  // Returns true iff this binding is an object property binding.
-  return this.object !== null && typeof this.part === 'string';
-};
-$.utils.Binding.prototype.isProp.prototype.constructor.prototype = $.utils.Binding.prototype.isProp.prototype;
+Object.setOwnerOf($.utils.Binding.prototype.isProp, $.physicals.Maximilian);
 $.utils.Binding.prototype.isProto = function isProto() {
-  // Returns true iff the binding is an object prototype binding.
+  /* Returns true iff the binding is an object prototype binding.
+   */
   return this.part === $.Selector.PROTOTYPE;
 };
-Object.setOwnerOf($.utils.Binding.prototype.isProto, Object.getOwnerOf($.Selector.db.get));
+Object.setOwnerOf($.utils.Binding.prototype.isProto, $.physicals.Maximilian);
 $.utils.Binding.prototype.isVar = function isVar() {
-  // Returns true iff the binding is a top-level variable binding.
+  /* Returns true iff the binding is a top-level variable binding.
+   */
   return this.object === null;
 };
+Object.setOwnerOf($.utils.Binding.prototype.isVar, $.physicals.Maximilian);
 $.utils.Binding.prototype.exists = function exists() {
   /* Returns true iff the binding exists.
    */
   var part = this.part;
   if (this.object === null) {
     if (!$.utils.code.isIdentifier(part)) {
-        throw new TypeError('Invalid part');
+        throw new TypeError('invalid variable identifier');
     }
     var evalGlobal = eval;
     try {
@@ -693,13 +650,13 @@ $.utils.Binding.prototype.exists = function exists() {
   }
   return Object.prototype.hasOwnProperty.call(this.object, part);
 };
-Object.setOwnerOf($.utils.Binding.prototype.exists, Object.getOwnerOf($.Selector.db.get));
-Object.setOwnerOf($.utils.Binding.prototype.exists.prototype, Object.getOwnerOf($.Selector.db.get));
+Object.setOwnerOf($.utils.Binding.prototype.exists, $.physicals.Maximilian);
+Object.setOwnerOf($.utils.Binding.prototype.exists.prototype, $.physicals.Maximilian);
 $.utils.Binding.from = function from(selector) {
   /* Create and return a Binding for the given selector - that is,
    * such that Binding.from(s).get() === s.toValue().
    */
-	var part = selector[selector.length - 1];
+  var part = selector[selector.length - 1];
   if (selector.isVar()) {
     // Global variable; no parent object.
     return new this(null, part);
@@ -710,9 +667,9 @@ $.utils.Binding.from = function from(selector) {
   if (!$.utils.isObject(object)) {
     throw new TypeError(String(parent) + ' is not an object');
   }
-	return new this(object, part);
+  return new this(object, part);
 };
-Object.setOwnerOf($.utils.Binding.from, Object.getOwnerOf($.Selector.db.get));
+Object.setOwnerOf($.utils.Binding.from, $.physicals.Maximilian);
 
 $.Selector.cache_ = (new 'Object.create')(null);
 

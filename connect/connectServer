@@ -47,9 +47,7 @@ const DEFAULT_CFG = {
   // Port of Code City.
   remotePort: 7777,
   // Age in seconds of abandoned queues to be closed.
-  connectionTimeout: 300,
-  // Random password for cookie encryption and salt for login IDs.
-  password: 'zzzzzzzzzzzzzzzz'
+  connectionTimeout: 300
 };
 
 /**
@@ -61,6 +59,10 @@ const DEFAULT_CFG = {
 var Queue = function (id) {
   // Save 'this' for closures below.
   var thisQueue = this;
+  /**
+   * ID of this queue in queueList.
+   */
+  this.id = id;
   /**
    * Time that this queue was pinged by a user.  Abandoned queues are deleted.
    */
@@ -91,12 +93,7 @@ var Queue = function (id) {
    */
   this.client = new net.Socket();
 
-  this.client.on('close', function() {
-    if (queueList[id]) {
-      delete queueList[id];
-      console.log('Code City closed session ' + id);
-    }
-  });
+  this.client.on('close', this.destroy.bind(this, 'Code City closed session'));
 
   this.client.on('error', function(error) {
     console.log('TCP error for session ' + id, error);
@@ -156,6 +153,18 @@ var Queue = function (id) {
 };
 
 /**
+ * Close this queue and deregister it.
+ * @param {string} msg Console message to print (with ID appended).
+ */
+Queue.prototype.destroy = function(msg) {
+  if (queueList[this.id]) {
+    delete queueList[this.id];
+  }
+  this.client.end();
+  console.log(msg + ' ' + this.id);
+};
+
+/**
  * Load a file from disk, add substitutions, and serve to the web.
  * @param {!Object} response HTTP server response object.
  * @param {string} filename Name of template file on disk.
@@ -212,24 +221,13 @@ function handleRequest(request, response) {
         cookieList[parts.shift().trim()] = decodeURI(parts.join('='));
     });
     // Validate the ID to ensure there was no tampering.
-    var m = cookieList.ID && cookieList.ID.match(/^([0-9a-f]+)_([0-9a-f]+)$/);
+    var m = cookieList.ID && cookieList.ID.match(/^[0-9a-f]+$/);
     if (!m) {
       console.log('Missing login cookie.  Redirecting.');
       response.writeHead(302, {  // Temporary redirect.
          'Location': CFG.loginUrl
        });
       response.end('Login required.  Redirecting.');
-      return;
-    }
-    var loginId = m[1];
-    var checksum = CFG.password + loginId;
-    checksum = crypto.createHash('sha3-224').update(checksum).digest('hex');
-    if (checksum !== m[2]) {
-      console.log('Invalid login cookie: ' + cookieList.ID);
-      response.writeHead(302, {  // Temporary redirect.
-         'Location': CFG.loginUrl
-       });
-      response.end('Login invalid.  Redirecting.');
       return;
     }
     var seed = (Date.now() * Math.random()).toString() + cookieList.ID;
@@ -245,14 +243,14 @@ function handleRequest(request, response) {
     queueList[sessionId] = queue;
 
     // Start a connection.
-    queue.client.write('identify as ' + loginId + '\n');
+    queue.client.write('identify as ' + cookieList.ID + '\n');
 
     var subs = {
       '<<<SESSION_ID>>>': sessionId,
       '<<<STATIC_URL>>>': CFG.staticUrl
     };
     serveFile(response, 'connect.html', subs);
-    console.log('Hello xxxx' + loginId.substring(loginId.length - 4) +
+    console.log('Hello xxxx' + cookieList.ID.substring(cookieList.ID.length - 4) +
                 ', starting session ' + sessionId);
     return;
   }
@@ -278,7 +276,7 @@ function handleRequest(request, response) {
       try {
         var receivedJson = JSON.parse(requestBody);
         if (!receivedJson['q']) {
-          throw 'no queue';
+          throw Error('No queue');
         }
       } catch (e) {
         console.error('Illegal JSON');
@@ -300,6 +298,7 @@ function ping(receivedJson, response) {
   var ackMemoNum = receivedJson['ackMemoNum'];
   var cmdNum = receivedJson['cmdNum'];
   var cmds = receivedJson['cmds'];
+  var logout = receivedJson['logout'];
 
   var queue = queueList[q];
   if (!queue) {
@@ -343,11 +342,16 @@ function ping(receivedJson, response) {
     var ackCmdNextPing = false;
   }
 
-  // Wait a fifth of a second for each command,
-  // but don't wait for more than a second.
-  var delay = Math.min(delay, 1000);
-  var replyFunc = pong.bind(null, queue, response, ackCmdNextPing);
-  setTimeout(replyFunc, delay);
+  if (logout) {
+    pong(queue, response, ackCmdNextPing);
+    queue.destroy('Client disconnected');
+  } else {
+    // Wait a fifth of a second for each command,
+    // but don't wait for more than a second.
+    var delay = Math.min(delay, 1000);
+    var replyFunc = pong.bind(null, queue, response, ackCmdNextPing);
+    setTimeout(replyFunc, delay);
+  }
 }
 
 function pong(queue, response, ackCmdNextPing) {
@@ -379,7 +383,7 @@ function readConfigFile(filename) {
     fs.writeFileSync(filename, data, 'utf8');
   }
   CFG = JSON.parse(data);
-  if (!CFG.password || CFG.password === DEFAULT_CFG.password) {
+  if (!CFG.loginUrl || CFG.loginUrl === DEFAULT_CFG.loginUrl) {
     throw Error(
         `Configuration file ${filename} not configured.  ` +
         'Please edit this file.');
@@ -396,9 +400,7 @@ function cleanup() {
   for (var id in queueList) {
     var queue = queueList[id];
     if (queue.lastPingTime < bestBefore) {
-      queue.client.end();
-      delete queueList[id];
-      console.log('Timeout of session ' + id);
+      queue.destroy('Timeout of session');
     }
   }
 }

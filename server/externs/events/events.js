@@ -24,21 +24,31 @@
 /** @const */
 var events = {};
 
-/** @constructor */
+/** @type {symbol} */
+events.errorMonitor;
+
+/** @constructor @struct */
 events.EventEmitter = function() {};
 
 /**
- * @param {string} event
+ * @param {string|symbol} event
  * @param {function(...)} listener
  * @return {events.EventEmitter}
  */
 events.EventEmitter.prototype.on = function(event, listener) {};
 
 /**
- * @param {string} event
+ * @param {string|symbol} event
  * @param {function(...)} listener
  * @return {events.EventEmitter}
  */
 events.EventEmitter.prototype.once = function(event, listener) {};
+
+/**
+ * @param {string|symbol} event
+ * @param {function(...)} listener
+ * @return {events.EventEmitter}
+ */
+events.EventEmitter.prototype.removeListener = function(event, listener) {};
 
 module.exports = events;

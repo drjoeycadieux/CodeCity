@@ -25,7 +25,7 @@
 
 $.servers.eval = {};
 $.servers.eval.connection = (new 'Object.create')($.connection);
-$.servers.eval.connection.onReceiveLine = function(text) {
+$.servers.eval.connection.onReceiveLine = function onReceiveLine(text) {
   if (this !== $.servers.eval.connected) {
     this.close();
     return;
@@ -33,7 +33,8 @@ $.servers.eval.connection.onReceiveLine = function(text) {
   this.write('⇒ ' + $.utils.code.eval(text) + '\n');
   this.write('eval> ');
 };
-$.servers.eval.connection.onReceiveLine.prototype = $.connection.onReceiveLine.prototype;
+Object.setOwnerOf($.servers.eval.connection.onReceiveLine, $.physicals.Maximilian);
+Object.setOwnerOf($.servers.eval.connection.onReceiveLine.prototype, $.physicals.Maximilian);
 $.servers.eval.connection.onConnect = function onConnect() {
   $.connection.onConnect.apply(this, arguments);
   if ($.servers.eval.connected) {
@@ -42,18 +43,19 @@ $.servers.eval.connection.onConnect = function onConnect() {
   $.servers.eval.connected = this;
   this.write('eval> ');
 };
-Object.setOwnerOf($.servers.eval.connection.onConnect, Object.getOwnerOf($.Jssp.OutputBuffer));
-Object.setOwnerOf($.servers.eval.connection.onConnect.prototype, Object.getOwnerOf($.Jssp.OutputBuffer));
-$.servers.eval.connection.close = function() {
+Object.setOwnerOf($.servers.eval.connection.onConnect, $.physicals.Maximilian);
+Object.setOwnerOf($.servers.eval.connection.onConnect.prototype, $.physicals.Maximilian);
+$.servers.eval.connection.close = function close() {
   this.write('This session has been terminated.\n');
   return $.connection.close.apply(this, arguments);
 };
-$.servers.eval.connection.close.prototype = $.connection.close.prototype;
-$.servers.eval.connection.onEnd = function() {
+Object.setOwnerOf($.servers.eval.connection.close, $.physicals.Maximilian);
+Object.setOwnerOf($.servers.eval.connection.close.prototype, $.physicals.Maximilian);
+$.servers.eval.connection.onEnd = function onEnd() {
   $.servers.eval.connected = null;
   return $.connection.onEnd.apply(this, arguments);
 };
-delete $.servers.eval.connection.onEnd.name;
-$.servers.eval.connection.onEnd.prototype = $.connection.onEnd.prototype;
+Object.setOwnerOf($.servers.eval.connection.onEnd, $.physicals.Maximilian);
+Object.setOwnerOf($.servers.eval.connection.onEnd.prototype, $.physicals.Maximilian);
 $.servers.eval.connected = null;
 

@@ -23,6 +23,7 @@
 
 /**
  * A WeakSet implementing the full Set interface, including iterability.
+ * @struct
  * @extends {WeakSet}
  * @implements {Iterable<!Array<VALUE>>}
  * @template VALUE
@@ -38,8 +39,13 @@ class IterableWeakSet {
     this.refs_ = new Set();
     /** @private @const @type {!WeakMap<VALUE, !WeakRef<VALUE>>}} */
     this.map_ = new WeakMap();
-    /** @private @const @type {!FinalizationGroup} */
-    this.finalisers_ = new FinalizationGroup(IterableWeakSet.cleanup_);
+    /**
+     * @private @const
+     * @type {!FinalizationRegistry<VALUE, !WeakRef<VALUE>, !WeakRef<VALUE>>}
+     */
+    this.finalisers_ = new FinalizationRegistry(ref => {
+      this.refs_.delete(ref);
+    });
 
     if (iterable === null || iterable === undefined) {
       return;
@@ -71,20 +77,9 @@ class IterableWeakSet {
       const ref = new WeakRef(value);
       this.map_.set(value, ref);
       this.refs_.add(ref);
-      this.finalisers_.register(value, {set: this.refs_, ref}, ref);
+      this.finalisers_.register(value, ref, ref);
     }
     return this;
-  }
-
-  /**
-   * Remove dead cells from .refs_.  Called automatically by the
-   * .finalisers_ FinalizationGroup.
-   * @return {void}
-   */
-  static cleanup_(iterator) {
-    for (const {set, ref} of iterator) {
-      set.delete(ref);
-    }
   }
 
   /**

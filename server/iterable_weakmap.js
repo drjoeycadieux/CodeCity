@@ -22,7 +22,7 @@
 'use strict';
 
 /**
- * A WeakRef<KEY>, value tuple in an IterableWeakMap.
+ * A (WeakRef<KEY>, value) tuple in an IterableWeakMap.
  * @template KEY, VALUE
  */
 class Cell {
@@ -54,8 +54,13 @@ class IterableWeakMap extends WeakMap {
     super();
     /** @private @const @type {!Set<!WeakRef<KEY>>} */
     this.refs_ = new Set();
-    /** @private @const @type {!FinalizationGroup} */
-    this.finalisers_ = new FinalizationGroup(IterableWeakMap.cleanup_);
+    /**
+     * @private @const
+     * @type {!FinalizationRegistry<VALUE, !WeakRef<VALUE>, !WeakRef<VALUE>>}
+     */
+    this.finalisers_ = new FinalizationRegistry(ref => {
+      this.refs_.delete(ref);
+    });
 
     if (iterable === null || iterable === undefined) {
       return;
@@ -72,17 +77,6 @@ class IterableWeakMap extends WeakMap {
             'Iterator value ' + entry + ' is not an entry object');
       }
       adder.call(this, entry[0], entry[1]);
-    }
-  }
-
-  /**
-   * Remove dead cells from .refs_.  Called automatically by the
-   * .finalisers_ FinalizationGroup.
-   * @return {void}
-   */
-  static cleanup_(iterator) {
-    for (const {set, ref} of iterator) {
-      set.delete(ref);
     }
   }
 
@@ -184,7 +178,7 @@ class IterableWeakMap extends WeakMap {
       const cell = new Cell(ref, value);
       super.set(key, cell);
       this.refs_.add(ref);
-      this.finalisers_.register(key, {set: this.refs_, ref}, ref);
+      this.finalisers_.register(key, ref, ref);
     }
     return this;
   }
